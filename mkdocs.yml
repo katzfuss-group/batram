@@ -1,0 +1,31 @@
+site_name: batram
+theme:
+  name: "material"
+
+plugins:
+- search
+- gen-files:
+    scripts:
+    - docs/gen_ref_pages.py
+- literate-nav:
+    nav_file: SUMMARY.md
+- mkdocstrings:
+    default_handler: python
+    handlers:
+      python:
+        options:
+          docstring_style: numpy
+          docstring_options:
+            ignore_init_summary: yes
+          merge_init_into_class: yes
+          show_submodules: no
+          show_source: false
+
+
+watch:
+- src/batram
+
+
+nav:
+  - Home: index.md
+  - Reference: reference/
