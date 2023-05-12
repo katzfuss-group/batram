@@ -1,12 +1,12 @@
 # batram
 
-Bayesian Transport Maps for non-Gaussian spatial fields. The package contains a python implementation of the method described in [Katzfuss and Schäfer (2021)](https://arxiv.org/abs/2108.04211).
+Bayesian Transport Maps for non-Gaussian spatial fields. The package contains a python implementation of the method described in [Katzfuss and Schäfer (2023)](https://doi.org/10.1080/01621459.2023.2197158).
 
 ## Installation
 
 Run the following command in your local virtual environment. Please make sure
 that a c++ compiler and the python headers are installed since this is needed to
-install the dependecy (`veccs`)[https://github.com/katzfuss-group/veccs].
+install the dependecy [veccs](https://github.com/katzfuss-group/veccs).
 
 1. `pip install -e .`
 
@@ -34,4 +34,3 @@ by Jian Cao. This work was supported by XXX [grant numbers xxxx, xxxx], YYY
 - BatRam
 
   ![Image from stable diffusion](https://user-images.githubusercontent.com/603509/228377927-bbdf6cde-80cf-455b-8633-b7638e1b0327.png)
-  Image from stable diffusion
