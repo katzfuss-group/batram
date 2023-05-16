@@ -263,7 +263,7 @@ class TransportMapKernel(torch.nn.Module):
         self.smooth = smooth
         self._tracked_values: dict["str", torch.Tensor] = {}
 
-    def _determin_m(self, theta, max_m):
+    def _determin_m(self, theta, max_m) -> torch.Tensor:
         m: torch.Tensor
         if self.fix_m is None:
             m = m_threshold(theta, max_m)
@@ -762,6 +762,7 @@ class SimpleTM(torch.nn.Module):
 
         return FitResult(
             model=self,
+            max_m=self.data.conditioning_sets.shape[-1],
             losses=np.array(losses),
             parameters=parameters[-1],
             test_losses=np.array(test_losses) if test_data is not None else None,
@@ -777,6 +778,7 @@ class FitResult:
     """
 
     model: SimpleTM
+    max_m: int
     losses: np.ndarray
     test_losses: None | np.ndarray
     parameters: dict[str, np.ndarray]
@@ -809,7 +811,7 @@ class FitResult:
             start_idx = int(0.8 * end_idx)
             inset_iterations = np.arange(start_idx, end_idx)
 
-            inset = ax.inset_axes([0.5, 0.5, 0.45, 0.45])
+            inset = ax.inset_axes([0.40, 0.45, 0.45, 0.45])
             inset.plot(inset_iterations, self.losses[start_idx:], "C0", **kwargs)
 
             if self.test_losses is not None:
@@ -821,5 +823,34 @@ class FitResult:
         ax.set_xlabel("Iteration")
         ax.set_ylabel("Train Loss")
         ax.legend(handles=legend_handle, loc="lower right", bbox_to_anchor=(0.925, 0.2))
+
+        return ax
+
+    def plot_theta(self, ax: plt.Axes | None = None, **kwargs) -> plt.Axes:
+        if ax is None:
+            fig, ax = plt.subplots(1, 1)
+
+        ax.plot(
+            self.param_chain["theta.theta"],
+            label=[f"theta{i}" for i in range(6)],
+            **kwargs,
+        )
+        ax.set_xlabel("Epoch")
+        ax.set_ylabel("Parameter Value")
+        ax.legend()
+
+        return ax
+
+    def plot_neighbors(self, ax: plt.Axes | None = None, **kwargs) -> plt.Axes:
+        if ax is None:
+            _, ax = plt.subplots(1, 1)
+
+        m = self.tracked_chain["transport_map_kernel.m"]
+        epochs = np.arange(m.size, **kwargs)
+        ax.step(epochs, m)
+        ax.set_title("Nearest neighbors through optimization")
+        ax.set_xlabel("Epoch")
+        ax.set_ylabel("Number of nearest neighbors (m)")
+        ax.set_ylim(0, self.max_m)
 
         return ax
