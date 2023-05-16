@@ -166,6 +166,17 @@ def test_optim_simple(simple_data: Data) -> None:
     assert res2.losses[-1] == pytest.approx(res.losses[-1], abs=1e-1)
 
 
+def test_init(simple_data) -> None:
+    theta_init = torch.tensor(
+        [simple_data.response[:, 0].square().mean().log(), 0.2, 0.0, 0.0, 0.0, -1.0]
+    )
+
+    tm_no_theta = SimpleTM(simple_data)
+    tm_theta = SimpleTM(simple_data, theta_init)
+
+    assert torch.all(tm_no_theta.theta() == tm_theta.theta())
+
+
 def test_optim_simNR900() -> None:
     # sanity check if performs silimar to the legacy code
     # the optimizer is not yet converged, but the loss is similar

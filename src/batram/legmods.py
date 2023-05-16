@@ -447,8 +447,8 @@ class SimpleTM(torch.nn.Module):
     def __init__(
         self,
         data: Data,
-        theta_init: torch.Tensor,
-        linear=False,
+        theta_init: None | torch.Tensor = None,
+        linear: bool = False,
         smooth: float = 1.5,
         nugMult: float = 4.0,
         new_method: bool = True,
@@ -456,6 +456,11 @@ class SimpleTM(torch.nn.Module):
         super().__init__()
 
         assert linear is False, "Linear TM not implemented yet."
+
+        if theta_init is None:
+            theta_init = torch.tensor(
+                [data.response[:, 0].square().mean().log(), 0.2, 0.0, 0.0, 0.0, -1.0]
+            )
 
         self.theta = ParameterBox(theta_init)
         self.augment_data = AugmentData()
