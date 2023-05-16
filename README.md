@@ -1,6 +1,8 @@
 # batram
 
-Bayesian Transport Maps for non-Gaussian spatial fields. The package contains a python implementation of the method described in [Katzfuss and Schäfer (2023)](https://doi.org/10.1080/01621459.2023.2197158).
+Bayesian Transport Maps for non-Gaussian spatial fields. The package contains a
+python implementation of the method described in [Katzfuss and Schäfer
+(2023)](https://doi.org/10.1080/01621459.2023.2197158).
 
 ## Installation
 
