@@ -6,6 +6,7 @@ from typing import NamedTuple
 
 import numpy as np
 import torch
+import veccs
 from gpytorch.kernels import MaternKernel
 from matplotlib import pyplot as plt
 from pyro.distributions import InverseGamma
@@ -133,14 +134,66 @@ class Data:
     augmented_response: torch.Tensor
     conditioning_sets: torch.Tensor
 
+    @property
+    def nlocs(self):
+        return self.locs.shape[0]
+
+    @property
+    def nreps(self):
+        return self.response.shape[0]
+
+    @property
+    def loc_dims(self):
+        return self.locs.shape[1]
+
     @staticmethod
     def new(locs, response, conditioning_set):
-        """Creates a new data object."""
+        """Creates a new data object.
+
+        It is assumed that the data is ordered according to maxmin ordering.
+        """
+        locs = torch.as_tensor(locs)
+        response = torch.as_tensor(response)
+        conditioning_set = torch.as_tensor(conditioning_set)
+
         nlocs = locs.shape[0]
         ecs = torch.hstack([torch.arange(nlocs).reshape(-1, 1), conditioning_set])
         augmented_response = torch.where(ecs == -1, torch.nan, response[:, ecs])
 
         return Data(locs, response, augmented_response, conditioning_set)
+
+    @staticmethod
+    def new_from_unordered(
+        locs: np.ndarray, response: np.ndarray, max_size_cond_set: int = 30
+    ) -> "Data":
+        """Creates a new data object from unordered data.
+
+        The function uses maxmin ordering and nearest neighbors to find the
+        conditioning sets. Both operations are based on L2 distance.
+
+        Parameters:
+        -----------
+        locs
+            Locations of the data. shape (N, d)
+            Each row is one location in a d-dimensional space.
+
+        response
+            Response of the data. Shape (n, N)
+
+        max_size_cond_set
+            Maximum size of the conditioning sets.
+
+        """
+
+        # order data according to maxmin ordering using L2
+        order = veccs.orderings.maxmin_cpp(locs)
+        locs = locs[order, ...]
+        response = response[..., order]
+
+        # find nearest neighbors according to L2
+        cs = veccs.orderings.find_nns_l2(locs, max_size_cond_set)
+
+        return Data.new(torch.as_tensor(locs), response, torch.as_tensor(cs))
 
 
 @dataclass
@@ -210,7 +263,7 @@ class AugmentData(torch.nn.Module):
     ) -> AugmentedData:
         if batch_idx is None:
             batch_idx = torch.arange(data.response.shape[1])
-        # batched_data = data[batch_idx]
+
         scales = compute_scale(data.locs, data.conditioning_sets)
 
         return AugmentedData(

@@ -54,6 +54,20 @@ def test_create_data() -> None:
     assert torch.allclose(data.augmented_response, augment_response, equal_nan=True)
 
 
+def test_data_new_with_ordering(simple_data: Data):
+    gen = np.random.default_rng(0)
+    permutation = gen.permutation(simple_data.nlocs)
+    locs = simple_data.locs.numpy()[permutation, :]
+    response = simple_data.response.numpy()[:, permutation]
+    cs_size = simple_data.conditioning_sets.numpy().shape[1]
+
+    data = Data.new_from_unordered(locs, response, cs_size)
+
+    assert torch.allclose(data.locs, simple_data.locs)
+    assert torch.allclose(data.response, simple_data.response)
+    assert torch.allclose(data.conditioning_sets, simple_data.conditioning_sets)
+
+
 def test_legmods_intlik_simple_data(simple_data: Data) -> None:
     theta_init = torch.tensor(
         [simple_data.response[:, 0].square().mean().log(), 0.3, 0.0, 0.0, 0.1, -1.0]
