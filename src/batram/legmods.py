@@ -193,7 +193,7 @@ class Data:
         # find nearest neighbors according to L2
         cs = veccs.orderings.find_nns_l2(locs, max_size_cond_set)
 
-        return Data.new(torch.as_tensor(locs), response, torch.as_tensor(cs))
+        return Data.new(locs, response, cs)
 
 
 @dataclass
