@@ -296,10 +296,6 @@ class TransportMapKernel(torch.nn.Module):
         self._tracked_values["m"] = m
         assert m <= max_m
 
-        # nbrs = data.conditioning_sets
-        # nbrs[..., m:] = -1
-
-        # x = obs[..., nbrs] * (nbrs >= 0).float()
         x = data.augmented_response[..., 1 : (m + 1)]
         x = torch.where(torch.isnan(x), 0.0, x)
         # Want the spatial dim in the first position for kernel computations,
@@ -308,17 +304,6 @@ class TransportMapKernel(torch.nn.Module):
         # parallelism.
         x = x.permute(-2, -3, -1)
 
-        # To be removed
-        # nugget_mean = (
-        #     torch.relu(
-        #         nug_fun(
-        #           torch.arange(data.scales.numel()),
-        #           theta, data.scales).sub(1e-5)
-        #     )
-        #     .add(1e-5)
-        #     .reshape(-1, 1)
-        #     .unsqueeze(-1)
-        # )
         nug_mean_reshaped = nug_mean.reshape(-1, 1, 1)
         sigmas = sigma_fun(torch.arange(data.scales.numel()), theta, data.scales)
         k = kernel_fun(x, theta, sigmas, self.smooth, nug_mean_reshaped)
@@ -348,9 +333,6 @@ class TransportMapKernel(torch.nn.Module):
         m = self._determin_m(theta, data.augmented_response.shape[-1] - 1)
         self._tracked_values["m"] = m
 
-        # m_int = int(m.item())  # we know it is a whole number
-        # NN: torch.Tensor = data.conditioning_sets[:, :m_int]
-        # init tmp vars
         K = torch.zeros(N, n, n)
         G = torch.zeros(N, n, n)
         # Prior vars
@@ -362,7 +344,6 @@ class TransportMapKernel(torch.nn.Module):
                 G[i, :, :] = torch.eye(n)
             else:
                 ncol = torch.minimum(data.batch_idx[i], m) + 1
-                # ignore tpye in next line since mypy does not allow to slice w/ tensor
                 X = data.augmented_response[:, i, 1:ncol]  # type: ignore[misc]
 
                 K[i, :, :] = self.kernel_fun(
