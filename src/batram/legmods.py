@@ -82,8 +82,6 @@ def kernel_fun(X1, theta, sigma, smooth, nuggetMean=None, X2=None):
     return (lin + nonlin).div(nuggetMean)
 
 
-# locsOdr: each row is one location
-# NN: each row represents one location
 def compute_scale(ordered_locs, NN):
     """Computes scaling for the data.
 
