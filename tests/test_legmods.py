@@ -114,11 +114,10 @@ def test_legmods_nugget_mean(simple_data: Data) -> None:
         [simple_data.response[:, 0].square().mean().log(), 0.3, 0.0, 0.0, 0.1, -1.0]
     )
 
-    theta = legmods.ParameterBox(theta_init)
-    nugget = legmods.Nugget(theta)
+    nugget = legmods.Nugget(theta_init[:2])
 
     n_locs = augdata.scales.numel()
-    legacy_nugget = fit_map.nug_fun(torch.arange(n_locs), theta(), augdata.scales)
+    legacy_nugget = fit_map.nug_fun(torch.arange(n_locs), theta_init, augdata.scales)
     new_nugget = nugget(augdata).squeeze()
     assert torch.allclose(new_nugget, legacy_nugget)
 

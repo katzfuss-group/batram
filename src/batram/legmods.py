@@ -239,14 +239,14 @@ class ParameterBox(torch.nn.Module):
 
 
 class Nugget(torch.nn.Module):
-    def __init__(self, theta: ParameterBox) -> None:
+    def __init__(self, nugget_params: torch.Tensor) -> None:
         super().__init__()
-        self.theta = theta
+        assert nugget_params.shape == (2,)
+        self.nugget_params = torch.nn.Parameter(nugget_params)
 
     def forward(self, data: AugmentedData) -> torch.Tensor:
-        theta = self.theta()
-        index = torch.arange(data.scales.numel())
-        nugget_mean = nug_fun(index, theta, data.scales)
+        theta = self.nugget_params
+        nugget_mean = (theta[0] + theta[1] * data.scales.log()).exp()
         nugget_mean = torch.relu(nugget_mean.sub(1e-5)).add(1e-5)
         return nugget_mean
 
