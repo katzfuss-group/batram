@@ -198,9 +198,12 @@ def test_init(simple_data) -> None:
     )
 
     tm_no_theta = SimpleTM(simple_data)
+    no_theta_params = torch.nn.ParameterList(tm_no_theta.parameters())
     tm_theta = SimpleTM(simple_data, theta_init)
+    theta_params = torch.nn.ParameterList(tm_theta.parameters())
 
-    assert torch.all(tm_no_theta.theta() == tm_theta.theta())
+    for ntp, tp in zip(no_theta_params, theta_params):
+        assert torch.allclose(ntp, tp)
 
 
 def test_optim_simNR900() -> None:
