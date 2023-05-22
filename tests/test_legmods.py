@@ -70,7 +70,7 @@ def test_legmods_intlik_simple_data(simple_data: Data) -> None:
 
     with torch.no_grad():
         intlik: float = float(tm(None))
-    assert intlik == pytest.approx(-128.09300231933594)
+    assert intlik == pytest.approx(-128.11582946777344)
 
 
 def test_legmods__intlik_mini_batch_simple_data(simple_data: Data) -> None:
@@ -83,7 +83,7 @@ def test_legmods__intlik_mini_batch_simple_data(simple_data: Data) -> None:
     with torch.no_grad():
         idx = torch.arange(simple_data.response.shape[1]).flip(0)
         intlik: float = float(tm(idx))
-    assert intlik == pytest.approx(-128.09300231933594)
+    assert intlik == pytest.approx(-128.11582946777344)
 
 
 def test_legmods_cond_samp_bayes(simple_data: Data) -> None:

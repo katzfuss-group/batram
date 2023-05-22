@@ -511,10 +511,9 @@ class _PreCalcLogLik(NamedTuple):
 
 
 class IntLogLik(torch.nn.Module):
-    def __init__(self, theta: ParameterBox, nugMult: float = 4.0):
+    def __init__(self, nugMult: float = 4.0):
         super().__init__()
-        self.nugMult = torch.tensor(4.0)
-        self.theta = theta
+        self.nugMult = torch.tensor(nugMult)
 
     def precalc(self, kernel_result: KernelResult, response) -> _PreCalcLogLik:
         nugSd = kernel_result.nug_mean.mul(self.nugMult)  # shape (N,)
@@ -566,7 +565,6 @@ class SimpleTM(torch.nn.Module):
         linear: bool = False,
         smooth: float = 1.5,
         nugMult: float = 4.0,
-        new_method: bool = True,
     ) -> None:
         super().__init__()
 
@@ -577,13 +575,13 @@ class SimpleTM(torch.nn.Module):
                 [data.response[:, 0].square().mean().log(), 0.2, 0.0, 0.0, 0.0, -1.0]
             )
 
-        self.theta = ParameterBox(theta_init)
         self.augment_data = AugmentData()
         self.nugget = Nugget(theta_init[:2])
-        self.transport_map_kernel = TransportMapKernel(self.theta, smooth=smooth)
-        self.intloglik = IntLogLik(self.theta, nugMult=nugMult)
+        self.transport_map_kernel = TransportMapKernelRefactor(
+            theta_init[2:], smooth=smooth
+        )
+        self.intloglik = IntLogLik(nugMult=nugMult)
         self.data = data
-        self._new_method = new_method
         self._tracked_values: dict[str, torch.Tensor] = {}
 
     def named_tracked_values(
@@ -606,9 +604,7 @@ class SimpleTM(torch.nn.Module):
 
         aug_data: AugmentedData = self.augment_data(data, batch_idx)
         nugget = self.nugget(aug_data)
-        kernel_result = self.transport_map_kernel(
-            aug_data, nugget, new_method=self._new_method
-        )
+        kernel_result = self.transport_map_kernel(aug_data, nugget)
         intloglik = self.intloglik(aug_data, kernel_result)
 
         loss = -aug_data.data_size / aug_data.batch_size * intloglik.sum()
