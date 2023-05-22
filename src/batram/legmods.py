@@ -190,6 +190,10 @@ class AugmentedData:
     def response_neighbor_values(self) -> torch.Tensor:
         return self.augmented_response[:, :, 1:]
 
+    @property
+    def max_m(self) -> int:
+        return self.augmented_response.shape[-1] - 1
+
 
 class AugmentData(torch.nn.Module):
     """Augments data
