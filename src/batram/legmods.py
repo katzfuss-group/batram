@@ -183,11 +183,11 @@ class AugmentedData:
     data: Data
 
     @property
-    def response(self):
+    def response(self) -> torch.Tensor:
         return self.augmented_response[:, :, 0]
 
     @property
-    def response_neighbor_values(self):
+    def response_neighbor_values(self) -> torch.Tensor:
         return self.augmented_response[:, :, 1:]
 
 
