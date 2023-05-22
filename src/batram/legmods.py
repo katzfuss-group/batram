@@ -255,7 +255,139 @@ class Nugget(torch.nn.Module):
         return nugget_mean
 
 
+class TransportMapKernelRefactor(torch.nn.Module):
+    """A temporary class to refactor the `TransportMapKernel`.
+
+    Once the refactor is complete, replace the `TransportMapKernel` with this
+    class. To complete the refactor, we will need to modify the `SimpleTM`
+    constructor slightly.
+    """
+
+    def __init__(
+        self, kernel_params: torch.Tensor, smooth: float = 1.5, fix_m: int | None = None
+    ) -> None:
+        super().__init__()
+
+        assert kernel_params.numel() == 4
+        self.theta_q = torch.nn.Parameter(kernel_params[0])
+        self.sigma_params = torch.nn.Parameter(kernel_params[1:3])
+        self.lengthscale = torch.nn.Parameter(kernel_params[-1])
+
+        self.fix_m = fix_m
+        self.smooth = smooth
+        self._tracked_values: dict["str", torch.Tensor] = {}
+
+        matern = MaternKernel(smooth)
+        matern._set_lengthscale(torch.tensor(1.0))
+        matern.requires_grad_(False)
+        self._kernel = matern
+
+    def _sigmas(self, scales: torch.Tensor) -> torch.Tensor:
+        """Computes nonlinear scales for the kernel."""
+        params = self.sigma_params
+        return torch.exp(params[0] + params[1] * scales.log())
+
+    def _scale(self, k: torch.Tensor) -> torch.Tensor:
+        """Computes scales of nearest neighbors in the kernel."""
+        theta_pos = torch.exp(self.theta_q)
+        return torch.exp(-0.5 * k * theta_pos)
+
+    def _range(self) -> torch.Tensor:
+        """Computes the lengthscale of the kernel."""
+        return self.lengthscale.exp()
+
+    def _m_threshold(self, max_m: int) -> torch.Tensor:
+        """Computes the size of the conditioning sets."""
+        rng = torch.arange(max_m) + 1
+        mask = self._scale(rng) >= 0.01
+        m = mask.sum()
+
+        if m <= 0:
+            raise RuntimeError(
+                f"Size of conditioning set is less than or equal to zero; m = {m.item()}."
+            )
+        if m > max_m:
+            logging.warning(
+                f"Required size of the conditioning sets m = {m.item()} is "
+                f"greater than the maximum number of neighbors {max_m = } in "
+                "the pre-calculated conditioning sets."
+            )
+        m = torch.tensor(max_m)
+        return m
+
+    def _determine_m(self, max_m: int) -> torch.Tensor:
+        m: torch.Tensor
+        if self.fix_m is None:
+            m = self._m_threshold(max_m)
+        else:
+            m = torch.tensor(self.fix_m)
+
+        return m
+
+    def _kernel_fun(
+        self,
+        x1: torch.Tensor,
+        sigmas: torch.Tensor,
+        nug_mean: torch.Tensor,
+        x2: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Computes the transport map kernel."""
+        k = torch.arange(x1.shape[-1]) + 1
+        scaling = self._scale(k)
+
+        _x1 = x1 * scaling
+        _x2 = _x1 if x2 is None else x2 * scaling
+        linear = _x1 @ _x2.mT
+
+        ls = self._range() * math.sqrt(2 * self.smooth)
+        nonlinear = self._kernel(_x1 / ls, _x2 / ls).to_dense()
+        out = (linear + sigmas**2 * nonlinear) / nug_mean
+        return out
+
+    def forward(self, data: AugmentedData, nug_mean: torch.Tensor) -> KernelResult:
+        """Computes with internalized kernel params instead of ParameterBox."""
+        max_m = data.max_m
+        m = self._determine_m(max_m)
+        self._tracked_values["m"] = m
+        assert m <= max_m
+
+        x = data.augmented_response[..., 1 : (m + 1)]
+        x = torch.where(torch.isnan(x), 0.0, x)
+        # Want the spatial dim in the first position for kernel computations,
+        # so data follow (..., N, n, fixed_m) instead of (..., n, N, m) as in
+        # the original kernel implementation. Doing this with an eye towards
+        # parallelism.
+        x = x.permute(-2, -3, -1)
+
+        nug_mean_reshaped = nug_mean.reshape(-1, 1, 1)
+        sigmas = self._sigmas(data.scales).reshape(-1, 1, 1)
+        k = self._kernel_fun(x, sigmas, nug_mean_reshaped)
+        eyes = torch.eye(k.shape[-1]).expand_as(k)
+        g = k + eyes
+
+        g[data.batch_idx == 0] = torch.eye(k.shape[-1])
+        try:
+            g_chol = torch.linalg.cholesky(g)
+        except RuntimeError as e:
+            # One contrast between the errors we return here and the ones in the
+            # other function is that here we don't know which Cholesky factor
+            # failed based on this message. It would be good to inherit the
+            # torch.linalg.LinAlgError and make a more informative error message
+            # with it.
+            raise RuntimeError("Failed to compute Cholesky decomposition of G.") from e
+
+        # Here we have talked about changing the response to be only the g
+        # matrices or simply the kernel. This requires further thought still.
+        return KernelResult(g, g_chol, nug_mean)
+
+
 class TransportMapKernel(torch.nn.Module):
+    """Initial reimplementation of the transport map kernel. To be deprecated.
+
+    Complete tests with `TransportMapKernelRefactor` and then remove from the
+    package.
+    """
+
     def __init__(
         self, theta: ParameterBox, smooth: float = 1.5, fix_m: int | None = None
     ) -> None:
@@ -447,7 +579,7 @@ class SimpleTM(torch.nn.Module):
 
         self.theta = ParameterBox(theta_init)
         self.augment_data = AugmentData()
-        self.nugget = Nugget(self.theta)
+        self.nugget = Nugget(theta_init[:2])
         self.transport_map_kernel = TransportMapKernel(self.theta, smooth=smooth)
         self.intloglik = IntLogLik(self.theta, nugMult=nugMult)
         self.data = data

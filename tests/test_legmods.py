@@ -8,7 +8,14 @@ import veccs.orderings
 
 import batram.legmods as legmods
 from batram.legacy import fit_map
-from batram.legmods import AugmentData, Data, Nugget, SimpleTM, TransportMapKernel
+from batram.legmods import (
+    AugmentData,
+    Data,
+    Nugget,
+    SimpleTM,
+    TransportMapKernel,
+    TransportMapKernelRefactor,
+)
 
 
 @pytest.fixture
@@ -130,7 +137,7 @@ def test_kernel_equiv(simple_data: Data) -> None:
     )
 
     theta = legmods.ParameterBox(theta_init)
-    nugget = Nugget(theta)
+    nugget = Nugget(theta_init[:2])
     kernel = TransportMapKernel(theta, fix_m=simple_data.conditioning_sets.shape[1])
 
     with torch.no_grad():
@@ -145,6 +152,26 @@ def test_kernel_equiv(simple_data: Data) -> None:
     assert torch.allclose(new.G, old.G, rtol=1e-2)
     assert torch.allclose(new.GChol, old.GChol, rtol=1e-1)
     assert torch.allclose(new.nug_mean.squeeze(), old.nug_mean.squeeze())
+
+
+def test_refactored_kernel(simple_data: Data) -> None:
+    augdata = legmods.AugmentData()(simple_data, None)
+    theta_init = torch.tensor(
+        [simple_data.response[:, 0].square().mean().log(), 0.3, 0.0, 0.0, 0.1, -1.0]
+    )
+
+    nugget = legmods.Nugget(theta_init[:2])
+    theta = legmods.ParameterBox(theta_init)
+    kernel = TransportMapKernel(theta, fix_m=augdata.max_m)
+    refactored_kernel = TransportMapKernelRefactor(theta_init[2:], fix_m=augdata.max_m)
+
+    with torch.no_grad():
+        nugget_mean = nugget(augdata)
+        ker = kernel(augdata, nugget_mean)
+        refac = refactored_kernel.forward(augdata, nugget_mean)
+
+    assert torch.allclose(ker.G, refac.G, rtol=1e-2)
+    assert torch.allclose(ker.GChol, refac.GChol, rtol=1e-1)
 
 
 def test_optim_simple(simple_data: Data) -> None:
