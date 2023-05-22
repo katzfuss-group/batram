@@ -629,8 +629,16 @@ class SimpleTM(torch.nn.Module):
 
         data = self.data.response
         NN = self.data.conditioning_sets
-        theta = self.theta()
+        theta = torch.tensor(
+            [
+                *self.nugget.nugget_params.detach(),
+                self.transport_map_kernel.theta_q.detach(),
+                *self.transport_map_kernel.sigma_params.detach(),
+                self.transport_map_kernel.lengthscale.detach(),
+            ]
+        )
         scal = augmented_data.scales
+        sigmas = self.transport_map_kernel._sigmas(scal)
         self.intloglik.nugMult
         # nugMult = self.intloglik.nugMult  # not used
         smooth = self.transport_map_kernel.smooth
@@ -658,11 +666,11 @@ class SimpleTM(torch.nn.Module):
                 ncol = min(i, m)
                 X = data[:, NN[i, :ncol]]
                 XPred = xNew[NN[i, :ncol]].unsqueeze(0)
-                cStar = self.transport_map_kernel.kernel_fun(
-                    XPred, theta, sigma_fun(i, theta, scal), smooth, nugMean[i], X
+                cStar = kernel_fun(
+                    XPred, theta, sigmas[i], smooth, nugMean[i], X
                 ).squeeze()
-                prVar = self.transport_map_kernel.kernel_fun(
-                    XPred, theta, sigma_fun(i, theta, scal), smooth, nugMean[i]
+                prVar = kernel_fun(
+                    XPred, theta, sigmas[i], smooth, nugMean[i]
                 ).squeeze()
             cChol = torch.linalg.solve_triangular(
                 chol[i, :, :], cStar.unsqueeze(1), upper=False
@@ -700,8 +708,16 @@ class SimpleTM(torch.nn.Module):
         NN = self.data.conditioning_sets
         # response = augmented_data.response
         # response_neighbor_values = augmented_data.response_neighbor_values
-        theta = self.theta()
+        theta = torch.tensor(
+            [
+                *self.nugget.nugget_params.detach(),
+                self.transport_map_kernel.theta_q.detach(),
+                *self.transport_map_kernel.sigma_params.detach(),
+                self.transport_map_kernel.lengthscale.detach(),
+            ]
+        )
         scal = augmented_data.scales
+        sigmas = self.transport_map_kernel._sigmas(scal)
         self.intloglik.nugMult
         # nugMult = self.intloglik.nugMult  # not used
         smooth = self.transport_map_kernel.smooth
@@ -731,11 +747,11 @@ class SimpleTM(torch.nn.Module):
                 XPred = obs[NN[i, :ncol]].unsqueeze(
                     0
                 )  # this line is different than in cond_sampl
-                cStar = self.transport_map_kernel.kernel_fun(
-                    XPred, theta, sigma_fun(i, theta, scal), smooth, nugMean[i], X
+                cStar = kernel_fun(
+                    XPred, theta, sigmas[i], smooth, nugMean[i], X
                 ).squeeze()
-                prVar = self.transport_map_kernel.kernel_fun(
-                    XPred, theta, sigma_fun(i, theta, scal), smooth, nugMean[i]
+                prVar = kernel_fun(
+                    XPred, theta, sigmas[i], smooth, nugMean[i]
                 ).squeeze()
             cChol = torch.linalg.solve_triangular(
                 chol[i, :, :], cStar.unsqueeze(1), upper=False
