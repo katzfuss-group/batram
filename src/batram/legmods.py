@@ -312,7 +312,7 @@ class TransportMapKernelRefactor(torch.nn.Module):
                 f"greater than the maximum number of neighbors {max_m = } in "
                 "the pre-calculated conditioning sets."
             )
-        m = torch.tensor(max_m)
+            m = torch.tensor(max_m)
         return m
 
     def _determine_m(self, max_m: int) -> torch.Tensor:
