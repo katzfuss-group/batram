@@ -490,13 +490,13 @@ class TransportMapKernel(torch.nn.Module):
                     nugMean[i],
                 )  # n X n
                 G[i, :, :] = K[i, :, :] + torch.eye(n)  # n X n
-            try:
-                GChol = torch.linalg.cholesky(G)
-            except RuntimeError as e:
-                raise RuntimeError(
-                    "Failed to compute Cholesky decomposition for observation "
-                    f"{data.batch_idx[i]}."
-                ) from e
+        try:
+            GChol = torch.linalg.cholesky(G)
+        except RuntimeError as e:
+            raise RuntimeError(
+                "Failed to compute Cholesky decomposition for observation "
+                f"{data.batch_idx[i]}."
+            ) from e
 
         return KernelResult(G=G, GChol=GChol, nug_mean=nugMean)
 
