@@ -953,17 +953,32 @@ class FitResult:
 
         return ax
 
-    def plot_theta(self, ax: plt.Axes | None = None, **kwargs) -> plt.Axes:
+    def plot_params(self, ax: plt.Axes | None = None, **kwargs) -> plt.Axes:
         if ax is None:
             fig, ax = plt.subplots(1, 1)
 
         ax.plot(
-            self.param_chain["theta.theta"],
-            label=[f"theta{i}" for i in range(6)],
+            self.param_chain["nugget.nugget_params"],
+            label=[f"nugget {i}" for i in range(2)],
+            **kwargs,
+        )
+        ax.plot(
+            self.param_chain["transport_map_kernel.theta_q"],
+            label="neighbors scale",
+            **kwargs,
+        )
+        ax.plot(
+            self.param_chain["transport_map_kernel.sigma_params"],
+            label=[f"sigma {i}" for i in range(2)],
+            **kwargs,
+        )
+        ax.plot(
+            self.param_chain["transport_map_kernel.lengthscale"],
+            label="lengthscale",
             **kwargs,
         )
         ax.set_xlabel("Epoch")
-        ax.set_ylabel("Parameter Value")
+        ax.set_ylabel("Raw Parameter Value")
         ax.legend()
 
         return ax
