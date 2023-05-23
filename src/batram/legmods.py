@@ -74,7 +74,7 @@ def kernel_fun(X1, theta, sigma, smooth, nuggetMean=None, X2=None):
     X2s = X2.mul(scaling_fun(torch.arange(1, N + 1).unsqueeze(0), theta))
     lin = X1s @ X2s.mT
     MaternObj = MaternKernel(smooth)
-    MaternObj._set_lengthscale(1.0)
+    MaternObj._set_lengthscale(torch.tensor(1.0))
     MaternObj.requires_grad_(False)
     lenScal = range_fun(theta) * math.sqrt(2 * smooth)
     nonlin = MaternObj.forward(X1s.div(lenScal), X2s.div(lenScal))
