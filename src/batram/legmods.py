@@ -233,6 +233,8 @@ class KernelResult:
     nug_mean: torch.Tensor
 
 
+# TODO: Deprecate / remove
+# The nugget and kernel refactors make this obsolete.
 class ParameterBox(torch.nn.Module):
     def __init__(self, theta) -> None:
         super().__init__()
@@ -255,6 +257,14 @@ class Nugget(torch.nn.Module):
         return nugget_mean
 
 
+# TODO: Promote to TransportMapKernel
+# This was put in to preserve the existing test suite. We can remove the old
+# test suite once we are satisfied with this implementation. This integration
+# does not eliminate the need for the helper functions at the start of the file
+# but it is a step in that direction. (The helpers are still used in the
+# `cond_samp` and `score` methods of `SimpleTM`.) This rewrite allows us to
+# more easily extend the covariates case and simplifies how parameters are
+# managed throughout the model.
 class TransportMapKernelRefactor(torch.nn.Module):
     """A temporary class to refactor the `TransportMapKernel`.
 
@@ -381,6 +391,8 @@ class TransportMapKernelRefactor(torch.nn.Module):
         return KernelResult(g, g_chol, nug_mean)
 
 
+# TODO: Deprecate / remove
+# This class becomes obsolete once we accept `TransportMapKernelRefactor`.
 class TransportMapKernel(torch.nn.Module):
     """Initial reimplementation of the transport map kernel. To be deprecated.
 
