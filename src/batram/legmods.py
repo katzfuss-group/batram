@@ -427,7 +427,7 @@ class SimpleTM(torch.nn.Module):
         self,
         data: Data,
         theta_init: torch.Tensor,
-        linear=False,
+        linear: bool = False,
         smooth: float = 1.5,
         nugMult: float = 4.0,
         new_method: bool = True,
@@ -458,7 +458,7 @@ class SimpleTM(torch.nn.Module):
         yield from gen
 
     def forward(
-        self, batch_idx: None | torch.Tensor = None, data: None | Data = None
+        self, batch_idx: Optional[torch.Tensor] = None, data: Optional[Data] = None
     ) -> torch.Tensor:
         if data is None:
             data = self.data
@@ -620,10 +620,10 @@ class SimpleTM(torch.nn.Module):
         self,
         num_iter,
         init_lr: float,
-        batch_size: None | int = None,
-        test_data: Data | None = None,
-        optimizer: None | torch.optim.Optimizer = None,
-        scheduler: None | torch.optim.lr_scheduler.LRScheduler = None,
+        batch_size: Optional[int] = None,
+        test_data: Optional[Data] = None,
+        optimizer: Optional[torch.optim.Optimizer] = None,
+        scheduler: Optional[torch.optim.lr_scheduler.LRScheduler] = None,
         silent: bool = False,
     ):
         """
@@ -759,7 +759,7 @@ class FitResult:
 
     def plot_loss(
         self,
-        ax: None | plt.Axes = None,
+        ax: Optional[plt.Axes] = None,
         use_inset: bool = True,
         **kwargs,
     ) -> plt.Axes:
