@@ -2,7 +2,7 @@ import logging
 import math
 from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import NamedTuple
+from typing import NamedTuple, Optional
 
 import numpy as np
 import torch
@@ -204,7 +204,7 @@ class AugmentData(torch.nn.Module):
         super().__init__()
 
     def forward(
-        self, data: Data, batch_idx: None | torch.Tensor = None
+        self, data: Data, batch_idx: Optional[torch.Tensor] = None
     ) -> AugmentedData:
         if batch_idx is None:
             batch_idx = torch.arange(data.response.shape[1])
@@ -253,7 +253,7 @@ class Nugget(torch.nn.Module):
 
 class TransportMapKernel(torch.nn.Module):
     def __init__(
-        self, theta: ParameterBox, smooth: float = 1.5, fix_m: int | None = None
+        self, theta: ParameterBox, smooth: float = 1.5, fix_m: Optional[int] = None
     ) -> None:
         super().__init__()
         self.fix_m = fix_m
@@ -282,7 +282,7 @@ class TransportMapKernel(torch.nn.Module):
 
     def forward(
         self, data: AugmentedData, nug_mean: torch.Tensor, new_method: bool = True
-    ) -> KernelResult:  # FIXME: Why is this linting with inconclusive types?
+    ) -> KernelResult:
         if new_method:
             return self.new_forward(data, nug_mean)
         else:
@@ -752,7 +752,7 @@ class FitResult:
 
     model: SimpleTM
     losses: np.ndarray
-    test_losses: None | np.ndarray
+    test_losses: Optional[np.ndarray]
     parameters: dict[str, np.ndarray]
     param_chain: dict[str, np.ndarray]
     tracked_chain: dict[str, np.ndarray]
