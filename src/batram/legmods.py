@@ -474,7 +474,12 @@ class SimpleTM(torch.nn.Module):
         return loss
 
     def cond_sample(
-        self, obs=None, xFix=torch.tensor([]), indLast=None, mode: str = "bayes"
+        self,
+        obs=None,
+        xFix=torch.tensor([]),
+        indLast=None,
+        mode: str = "bayes",
+        num_samples: int = 1,
     ):
         """
         I'm not sure where this should exactly be implemented.
@@ -484,6 +489,11 @@ class SimpleTM(torch.nn.Module):
 
         In any case, this class should expose an interface.
         """
+
+        if obs is not None:
+            raise ValueError(
+                "The argument obs is not used and will be removed in a future version."
+            )
 
         if mode != "bayes":
             raise NotImplementedError("No modes other than bayes implemented")
@@ -511,33 +521,35 @@ class SimpleTM(torch.nn.Module):
         if indLast is None:
             indLast = N
         # loop over variables/locations
-        xNew = torch.cat((xFix, torch.zeros(N - xFix.size(0))))
+        xNew = torch.empty((num_samples, N))
+        xNew[:, : xFix.size(0)] = xFix.repeat(num_samples, 1)
+        xNew[:, xFix.size(0) :] = 0.0
         for i in range(xFix.size(0), indLast):
             # predictive distribution for current sample
             if i == 0:
-                cStar = torch.zeros(n)
-                prVar = torch.tensor(0.0)
+                cStar = torch.zeros((num_samples, n))
+                prVar = torch.zeros((num_samples,))
             else:
                 ncol = min(i, m)
                 X = data[:, NN[i, :ncol]]
-                XPred = xNew[NN[i, :ncol]].unsqueeze(0)
+                XPred = xNew[:, NN[i, :ncol]].unsqueeze(1)
                 cStar = self.transport_map_kernel.kernel_fun(
                     XPred, theta, sigma_fun(i, theta, scal), smooth, nugMean[i], X
-                ).squeeze()
+                ).squeeze(1)
                 prVar = self.transport_map_kernel.kernel_fun(
                     XPred, theta, sigma_fun(i, theta, scal), smooth, nugMean[i]
-                ).squeeze()
+                ).squeeze((1, 2))
             cChol = torch.linalg.solve_triangular(
-                chol[i, :, :], cStar.unsqueeze(1), upper=False
-            ).squeeze()
-            meanPred = yTilde[i, :].mul(cChol).sum()
-            varPredNoNug = prVar - cChol.square().sum()
+                chol[i, :, :], cStar.unsqueeze(-1), upper=False
+            ).squeeze(-1)
+            meanPred = yTilde[i, :].unsqueeze(0).mul(cChol).sum(1)
+            varPredNoNug = prVar - cChol.square().sum(1)
 
             # sample
             invGDist = InverseGamma(concentration=alphaPost[i], rate=betaPost[i])
-            nugget = invGDist.sample()
-            uniNDist = Normal(loc=meanPred, scale=nugget.mul(1 + varPredNoNug).sqrt())
-            xNew[i] = uniNDist.sample()
+            nugget = invGDist.sample((num_samples,))
+            uniNDist = Normal(loc=meanPred, scale=nugget.mul(1.0 + varPredNoNug).sqrt())
+            xNew[:, i] = uniNDist.sample()
 
         return xNew
 
