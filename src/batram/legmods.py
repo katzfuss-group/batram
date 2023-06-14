@@ -13,6 +13,8 @@ from torch.distributions import Normal
 from torch.distributions.studentT import StudentT
 from tqdm import tqdm
 
+from .stopper import PEarlyStopper
+
 
 def nug_fun(i, theta, scales):
     """Scales nugget (d) at location i."""
@@ -636,6 +638,7 @@ class SimpleTM(torch.nn.Module):
         test_data: Data | None = None,
         optimizer: None | torch.optim.Optimizer = None,
         scheduler: None | torch.optim.lr_scheduler.LRScheduler = None,
+        stopper: None | PEarlyStopper = None,
         silent: bool = False,
     ):
         """
@@ -656,6 +659,8 @@ class SimpleTM(torch.nn.Module):
         scheduler
             Learning rate scheduler to use. If None, CosineAnnealingLR
             is used with default optimizer.
+        stopper
+            An early stopper. If None, no early stopping is used. Requires test data.
         silent
             If True, do not print progress.
         """
@@ -670,6 +675,9 @@ class SimpleTM(torch.nn.Module):
                 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
                     optimizer, T_max=num_iter
                 )
+
+        if stopper is not None and test_data is None:
+            raise ValueError("Cannot use stopper without test data.")
 
         if batch_size is None:
             batch_size = self.data.response.shape[1]
@@ -691,8 +699,7 @@ class SimpleTM(torch.nn.Module):
             {k: np.copy(v.detach().numpy()) for k, v in self.named_tracked_values()}
         ]
 
-        tqdm_obj = tqdm(range(num_iter), disable=silent)
-        for _ in tqdm_obj:
+        for _ in (tqdm_obj := tqdm(range(num_iter), disable=silent)):
             # create batches
             if batch_size == data_size:
                 idxes = [torch.arange(data_size)]
@@ -737,6 +744,15 @@ class SimpleTM(torch.nn.Module):
             )
 
             tqdm_obj.set_description(desc)
+
+            if stopper is not None:
+                state = {k: v.detach().clone() for k, v in self.state_dict().items()}
+                stop = stopper.step(test_losses[-1], state)
+                if stop:
+                    # restore best state
+                    self.load_state_dict(stopper.best_state())
+                    # and break
+                    break
 
         param_chain = {}
         for k in parameters[0].keys():
