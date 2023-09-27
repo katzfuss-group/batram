@@ -12,6 +12,11 @@ install the dependecy [veccs](https://github.com/katzfuss-group/veccs).
 
 1. `pip install -e .`
 
+### Remarks
+
+- We have observed that the software seems to be unstable on a MacBook Pro with
+  M1 chip when using conda instead of a regular python installation.
+
 
 ## How to contribute?
 
