@@ -2,12 +2,13 @@ import logging
 import math
 from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import NamedTuple
+from typing import NamedTuple, cast
 
 import numpy as np
 import torch
 from gpytorch.kernels import MaternKernel
 from matplotlib import pyplot as plt
+from matplotlib.axes import Axes as MPLAxes
 from pyro.distributions import InverseGamma
 from torch.distributions import Normal
 from torch.distributions.studentT import StudentT
@@ -801,7 +802,7 @@ class FitResult:
         legend_handle = [p1]
 
         if self.test_losses is not None:
-            twin = ax.twinx()
+            twin = cast(MPLAxes, ax.twinx())
             (p2,) = twin.plot(self.test_losses, "C1", label="Test Loss", **kwargs)
             legend_handle.append(p2)
             twin.set_ylabel("Test Loss")
@@ -811,11 +812,11 @@ class FitResult:
             start_idx = int(0.8 * end_idx)
             inset_iterations = np.arange(start_idx, end_idx)
 
-            inset = ax.inset_axes([0.5, 0.5, 0.45, 0.45])
+            inset = ax.inset_axes((0.5, 0.5, 0.45, 0.45))
             inset.plot(inset_iterations, self.losses[start_idx:], "C0", **kwargs)
 
             if self.test_losses is not None:
-                insert_twim = inset.twinx()
+                insert_twim = cast(MPLAxes, inset.twinx())
                 insert_twim.plot(
                     inset_iterations, self.test_losses[start_idx:], "C1", **kwargs
                 )
