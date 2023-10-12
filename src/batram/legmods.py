@@ -274,7 +274,10 @@ class TransportMapKernelRefactor(torch.nn.Module):
     """
 
     def __init__(
-        self, kernel_params: torch.Tensor, smooth: float = 1.5, fix_m: int | None = None
+        self,
+        kernel_params: torch.Tensor,
+        smooth: float = 1.5,
+        fix_m: int | None = None,
     ) -> None:
         super().__init__()
 
@@ -523,28 +526,28 @@ class _PreCalcLogLik(NamedTuple):
 
 
 class IntLogLik(torch.nn.Module):
-    def __init__(self, nugMult: float = 4.0):
+    def __init__(self, nug_mult: float = 4.0):
         super().__init__()
-        self.nugMult = torch.tensor(nugMult)
+        self.nug_mult = torch.tensor(nug_mult)
 
     def precalc(self, kernel_result: KernelResult, response) -> _PreCalcLogLik:
-        nugSd = kernel_result.nug_mean.mul(self.nugMult)  # shape (N,)
-        alpha = kernel_result.nug_mean.pow(2).div(nugSd.pow(2)).add(2)  # shape (N,)
+        nug_sd = kernel_result.nug_mean.mul(self.nug_mult)  # shape (N,)
+        alpha = kernel_result.nug_mean.pow(2).div(nug_sd.pow(2)).add(2)  # shape (N,)
         beta = kernel_result.nug_mean.mul(alpha.sub(1))  # shape (N,)
 
         n = response.shape[0]
-        yTilde = torch.linalg.solve_triangular(
+        y_tilde = torch.linalg.solve_triangular(
             kernel_result.GChol, response.t().unsqueeze(-1), upper=False
         ).squeeze()  # (N, n)
-        alphaPost = alpha.add(n / 2)  # (N),
-        betaPost = beta + yTilde.square().sum(dim=1).div(2)  # (N,)
+        alpha_post = alpha.add(n / 2)  # (N),
+        beta_post = beta + y_tilde.square().sum(dim=1).div(2)  # (N,)
         return _PreCalcLogLik(
-            nug_sd=nugSd,
+            nug_sd=nug_sd,
             alpha=alpha,
             beta=beta,
-            alpha_post=alphaPost,
-            beta_post=betaPost,
-            y_tilde=yTilde,
+            alpha_post=alpha_post,
+            beta_post=beta_post,
+            y_tilde=y_tilde,
         )
 
     def forward(self, data: AugmentedData, kernel_result: KernelResult) -> torch.Tensor:
@@ -576,23 +579,24 @@ class SimpleTM(torch.nn.Module):
         theta_init: None | torch.Tensor = None,
         linear: bool = False,
         smooth: float = 1.5,
-        nugMult: float = 4.0,
+        nug_mult: float = 4.0,
     ) -> None:
         super().__init__()
 
         assert linear is False, "Linear TM not implemented yet."
 
         if theta_init is None:
-            theta_init = torch.tensor(
-                [data.response[:, 0].square().mean().log(), 0.2, 0.0, 0.0, 0.0, -1.0]
-            )
+            # This is essentially \log E[y^2] over the spatial dim
+            # to initialize the nugget mean.
+            log_2m = data.response[:, 0].square().mean().log()
+            theta_init = torch.tensor([log_2m, 0.2, 0.0, 0.0, 0.0, -1.0])
 
         self.augment_data = AugmentData()
         self.nugget = Nugget(theta_init[:2])
         self.transport_map_kernel = TransportMapKernelRefactor(
             theta_init[2:], smooth=smooth
         )
-        self.intloglik = IntLogLik(nugMult=nugMult)
+        self.intloglik = IntLogLik(nug_mult=nug_mult)
         self.data = data
         self._tracked_values: dict[str, torch.Tensor] = {}
 
@@ -651,7 +655,7 @@ class SimpleTM(torch.nn.Module):
         )
         scal = augmented_data.scales
         sigmas = self.transport_map_kernel._sigmas(scal)
-        self.intloglik.nugMult
+        self.intloglik.nug_mult
         # nugMult = self.intloglik.nugMult  # not used
         smooth = self.transport_map_kernel.smooth
 
@@ -730,7 +734,7 @@ class SimpleTM(torch.nn.Module):
         )
         scal = augmented_data.scales
         sigmas = self.transport_map_kernel._sigmas(scal)
-        self.intloglik.nugMult
+        self.intloglik.nug_mult
         # nugMult = self.intloglik.nugMult  # not used
         smooth = self.transport_map_kernel.smooth
 

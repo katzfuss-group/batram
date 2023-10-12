@@ -66,7 +66,7 @@ def test_legmods_intlik_simple_data(simple_data: Data) -> None:
         [simple_data.response[:, 0].square().mean().log(), 0.3, 0.0, 0.0, 0.1, -1.0]
     )
 
-    tm = SimpleTM(simple_data, theta_init, False, smooth=1.5, nugMult=4.0)
+    tm = SimpleTM(simple_data, theta_init, False, smooth=1.5, nug_mult=4.0)
 
     with torch.no_grad():
         intlik: float = float(tm(None))
@@ -78,7 +78,7 @@ def test_legmods__intlik_mini_batch_simple_data(simple_data: Data) -> None:
         [simple_data.response[:, 0].square().mean().log(), 0.3, 0.0, 0.0, 0.1, -1.0]
     )
 
-    tm = SimpleTM(simple_data, theta_init, False, smooth=1.5, nugMult=4.0)
+    tm = SimpleTM(simple_data, theta_init, False, smooth=1.5, nug_mult=4.0)
 
     with torch.no_grad():
         idx = torch.arange(simple_data.response.shape[1]).flip(0)
@@ -92,7 +92,7 @@ def test_legmods_cond_samp_bayes(simple_data: Data) -> None:
         [simple_data.response[:, 0].square().mean().log(), 0.3, 0.0, 0.0, 0.1, -1.0]
     )
 
-    tm = SimpleTM(simple_data, theta_init, False, smooth=1.5, nugMult=4.0)
+    tm = SimpleTM(simple_data, theta_init, False, smooth=1.5, nug_mult=4.0)
 
     with torch.no_grad():
         sample = tm.cond_sample()
@@ -108,7 +108,7 @@ def test_legmods_score(simple_data: Data) -> None:
         [simple_data.response[:, 0].square().mean().log(), 0.3, 0.0, 0.0, 0.1, -1.0]
     )
 
-    tm = SimpleTM(simple_data, theta_init, False, smooth=1.5, nugMult=4.0)
+    tm = SimpleTM(simple_data, theta_init, False, smooth=1.5, nug_mult=4.0)
     with torch.no_grad():
         score = tm.score(simple_data.response[0, :])
 
@@ -184,10 +184,10 @@ def test_optim_simple(simple_data: Data) -> None:
         [simple_data.response[:, 0].square().mean().log(), 0.3, 0.0, 0.0, 0.1, -1.0]
     )
 
-    tm = SimpleTM(simple_data, theta_init.clone(), False, smooth=1.5, nugMult=4.0)
+    tm = SimpleTM(simple_data, theta_init.clone(), False, smooth=1.5, nug_mult=4.0)
     res = tm.fit(100, 0.3, test_data=tm.data)
 
-    tm = SimpleTM(simple_data, theta_init.clone(), False, smooth=1.5, nugMult=4.0)
+    tm = SimpleTM(simple_data, theta_init.clone(), False, smooth=1.5, nug_mult=4.0)
     res2 = tm.fit(100, 0.3, batch_size=50, test_data=tm.data)
     assert res2.losses[-1] == pytest.approx(res.losses[-1], abs=1e-1)
 
@@ -235,7 +235,7 @@ def test_optim_simNR900() -> None:
         [tmdata.response[:, 0].square().mean().log(), 0.2, 0.0, 0.0, 0.0, -1.0]
     )
 
-    tm = SimpleTM(tmdata, theta_init, False, smooth=1.5, nugMult=4.0)
+    tm = SimpleTM(tmdata, theta_init, False, smooth=1.5, nug_mult=4.0)
     opt = torch.optim.Adam(tm.parameters(), lr=0.01)
 
     # catch the warning that the conditioning set is not large enough
