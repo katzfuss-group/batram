@@ -626,7 +626,7 @@ class SimpleTM(torch.nn.Module):
         return loss
 
     def cond_sample(
-        self, obs=None, xFix=torch.tensor([]), indLast=None, mode: str = "bayes"
+        self, obs=None, x_fix=torch.tensor([]), last_ind=None, mode: str = "bayes"
     ):
         """
         I'm not sure where this should exactly be implemented.
@@ -652,27 +652,27 @@ class SimpleTM(torch.nn.Module):
                 self.kernel.lengthscale.detach(),
             ]
         )
-        scal = augmented_data.scales
-        sigmas = self.kernel._sigmas(scal)
+        scales = augmented_data.scales
+        sigmas = self.kernel._sigmas(scales)
         self.intloglik.nug_mult
         # nugMult = self.intloglik.nugMult  # not used
         smooth = self.kernel.smooth
 
         nug_mean = self.nugget(augmented_data)
         kernel_result = self.kernel.forward(augmented_data, nug_mean)
-        nugMean = kernel_result.nug_mean
+        nugget_mean = kernel_result.nug_mean
         chol = kernel_result.GChol
         tmp_res = self.intloglik.precalc(kernel_result, augmented_data.response)
-        yTilde = tmp_res.y_tilde
-        betaPost = tmp_res.beta_post
-        alphaPost = tmp_res.alpha_post
+        y_tilde = tmp_res.y_tilde
+        beta_post = tmp_res.beta_post
+        alpha_post = tmp_res.alpha_post
         n, N = data.shape
         m = NN.shape[1]
-        if indLast is None:
-            indLast = N
+        if last_ind is None:
+            last_ind = N
         # loop over variables/locations
-        xNew = torch.cat((xFix, torch.zeros(N - xFix.size(0))))
-        for i in range(xFix.size(0), indLast):
+        x_new = torch.cat((x_fix, torch.zeros(N - x_fix.size(0))))
+        for i in range(x_fix.size(0), last_ind):
             # predictive distribution for current sample
             if i == 0:
                 cStar = torch.zeros(n)
@@ -680,28 +680,28 @@ class SimpleTM(torch.nn.Module):
             else:
                 ncol = min(i, m)
                 X = data[:, NN[i, :ncol]]
-                XPred = xNew[NN[i, :ncol]].unsqueeze(0)
+                XPred = x_new[NN[i, :ncol]].unsqueeze(0)
                 cStar = kernel_fun(
-                    XPred, theta, sigmas[i], smooth, nugMean[i], X
+                    XPred, theta, sigmas[i], smooth, nugget_mean[i], X
                 ).squeeze()
                 prVar = kernel_fun(
-                    XPred, theta, sigmas[i], smooth, nugMean[i]
+                    XPred, theta, sigmas[i], smooth, nugget_mean[i]
                 ).squeeze()
             cChol = torch.linalg.solve_triangular(
                 chol[i, :, :], cStar.unsqueeze(1), upper=False
             ).squeeze()
-            meanPred = yTilde[i, :].mul(cChol).sum()
+            meanPred = y_tilde[i, :].mul(cChol).sum()
             varPredNoNug = prVar - cChol.square().sum()
 
             # sample
-            invGDist = InverseGamma(concentration=alphaPost[i], rate=betaPost[i])
+            invGDist = InverseGamma(concentration=alpha_post[i], rate=beta_post[i])
             nugget = invGDist.sample()
             uniNDist = Normal(loc=meanPred, scale=nugget.mul(1 + varPredNoNug).sqrt())
-            xNew[i] = uniNDist.sample()
+            x_new[i] = uniNDist.sample()
 
-        return xNew
+        return x_new
 
-    def score(self, obs, xFix=torch.tensor([]), indLast=None, mode: str = "score"):
+    def score(self, obs, x_fix=torch.tensor([]), last_ind=None, mode: str = "score"):
         """
         I'm not sure where this should exactly be implemented.
 
@@ -731,27 +731,27 @@ class SimpleTM(torch.nn.Module):
                 self.kernel.lengthscale.detach(),
             ]
         )
-        scal = augmented_data.scales
-        sigmas = self.kernel._sigmas(scal)
+        scales = augmented_data.scales
+        sigmas = self.kernel._sigmas(scales)
         self.intloglik.nug_mult
         # nugMult = self.intloglik.nugMult  # not used
         smooth = self.kernel.smooth
 
         nug_mean = self.nugget(augmented_data)
         kernel_result = self.kernel.forward(augmented_data, nug_mean)
-        nugMean = kernel_result.nug_mean
+        nugget_mean = kernel_result.nug_mean
         chol = kernel_result.GChol
         tmp_res = self.intloglik.precalc(kernel_result, augmented_data.response)
-        yTilde = tmp_res.y_tilde
-        betaPost = tmp_res.beta_post
-        alphaPost = tmp_res.alpha_post
+        y_tilde = tmp_res.y_tilde
+        beta_post = tmp_res.beta_post
+        alpha_post = tmp_res.alpha_post
         n, N = data.shape
         m = NN.shape[1]
-        if indLast is None:
-            indLast = N
+        if last_ind is None:
+            last_ind = N
         # loop over variables/locations
-        scr = torch.zeros(N)
-        for i in range(xFix.size(0), indLast):
+        score = torch.zeros(N)
+        for i in range(x_fix.size(0), last_ind):
             # predictive distribution for current sample
             if i == 0:
                 cStar = torch.zeros(n)
@@ -763,26 +763,26 @@ class SimpleTM(torch.nn.Module):
                     0
                 )  # this line is different than in cond_sampl
                 cStar = kernel_fun(
-                    XPred, theta, sigmas[i], smooth, nugMean[i], X
+                    XPred, theta, sigmas[i], smooth, nugget_mean[i], X
                 ).squeeze()
                 prVar = kernel_fun(
-                    XPred, theta, sigmas[i], smooth, nugMean[i]
+                    XPred, theta, sigmas[i], smooth, nugget_mean[i]
                 ).squeeze()
             cChol = torch.linalg.solve_triangular(
                 chol[i, :, :], cStar.unsqueeze(1), upper=False
             ).squeeze()
-            meanPred = yTilde[i, :].mul(cChol).sum()
+            meanPred = y_tilde[i, :].mul(cChol).sum()
             varPredNoNug = prVar - cChol.square().sum()
 
             # score
-            initVar = betaPost[i] / alphaPost[i] * (1 + varPredNoNug)
-            STDist = StudentT(2 * alphaPost[i])
-            scr[i] = (
+            initVar = beta_post[i] / alpha_post[i] * (1 + varPredNoNug)
+            STDist = StudentT(2 * alpha_post[i])
+            score[i] = (
                 STDist.log_prob((obs[i] - meanPred) / initVar.sqrt())
                 - 0.5 * initVar.log()
             )
 
-        return scr[xFix.size(0) :].sum()
+        return score[x_fix.size(0) :].sum()
 
     def fit(
         self,
@@ -978,17 +978,17 @@ class FitResult:
             **kwargs,
         )
         ax.plot(
-            self.param_chain["transport_map_kernel.theta_q"],
+            self.param_chain["kernel.theta_q"],
             label="neighbors scale",
             **kwargs,
         )
         ax.plot(
-            self.param_chain["transport_map_kernel.sigma_params"],
+            self.param_chain["kernel.sigma_params"],
             label=[f"sigma {i}" for i in range(2)],
             **kwargs,
         )
         ax.plot(
-            self.param_chain["transport_map_kernel.lengthscale"],
+            self.param_chain["kernel.lengthscale"],
             label="lengthscale",
             **kwargs,
         )
@@ -1002,7 +1002,7 @@ class FitResult:
         if ax is None:
             _, ax = plt.subplots(1, 1)
 
-        m = self.tracked_chain["transport_map_kernel.m"]
+        m = self.tracked_chain["kernel.m"]
         epochs = np.arange(m.size, **kwargs)
         ax.step(epochs, m)
         ax.set_title("Nearest neighbors through optimization")
