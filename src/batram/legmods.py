@@ -265,7 +265,7 @@ class Nugget(torch.nn.Module):
 # `cond_samp` and `score` methods of `SimpleTM`.) This rewrite allows us to
 # more easily extend the covariates case and simplifies how parameters are
 # managed throughout the model.
-class TransportMapKernelRefactor(torch.nn.Module):
+class TransportMapKernel(torch.nn.Module):
     """A temporary class to refactor the `TransportMapKernel`.
 
     Once the refactor is complete, replace the `TransportMapKernel` with this
@@ -396,7 +396,7 @@ class TransportMapKernelRefactor(torch.nn.Module):
 
 # TODO: Deprecate / remove
 # This class becomes obsolete once we accept `TransportMapKernelRefactor`.
-class TransportMapKernel(torch.nn.Module):
+class OldTransportMapKernel(torch.nn.Module):
     """Initial reimplementation of the transport map kernel. To be deprecated.
 
     Complete tests with `TransportMapKernelRefactor` and then remove from the
@@ -594,9 +594,7 @@ class SimpleTM(torch.nn.Module):
 
         self.augment_data = AugmentData()
         self.nugget = Nugget(theta_init[:2])
-        self.transport_map_kernel = TransportMapKernelRefactor(
-            theta_init[2:], smooth=smooth
-        )
+        self.kernel = TransportMapKernel(theta_init[2:], smooth=smooth)
         self.intloglik = IntLogLik(nug_mult=nug_mult)
         self.data = data
         self._tracked_values: dict[str, torch.Tensor] = {}
@@ -621,7 +619,7 @@ class SimpleTM(torch.nn.Module):
 
         aug_data: AugmentedData = self.augment_data(data, batch_idx)
         nugget = self.nugget(aug_data)
-        kernel_result = self.transport_map_kernel(aug_data, nugget)
+        kernel_result = self.kernel(aug_data, nugget)
         intloglik = self.intloglik(aug_data, kernel_result)
 
         loss = -aug_data.data_size / aug_data.batch_size * intloglik.sum()
@@ -649,19 +647,19 @@ class SimpleTM(torch.nn.Module):
         theta = torch.tensor(
             [
                 *self.nugget.nugget_params.detach(),
-                self.transport_map_kernel.theta_q.detach(),
-                *self.transport_map_kernel.sigma_params.detach(),
-                self.transport_map_kernel.lengthscale.detach(),
+                self.kernel.theta_q.detach(),
+                *self.kernel.sigma_params.detach(),
+                self.kernel.lengthscale.detach(),
             ]
         )
         scal = augmented_data.scales
-        sigmas = self.transport_map_kernel._sigmas(scal)
+        sigmas = self.kernel._sigmas(scal)
         self.intloglik.nug_mult
         # nugMult = self.intloglik.nugMult  # not used
-        smooth = self.transport_map_kernel.smooth
+        smooth = self.kernel.smooth
 
         nug_mean = self.nugget(augmented_data)
-        kernel_result = self.transport_map_kernel.forward(augmented_data, nug_mean)
+        kernel_result = self.kernel.forward(augmented_data, nug_mean)
         nugMean = kernel_result.nug_mean
         chol = kernel_result.GChol
         tmp_res = self.intloglik.precalc(kernel_result, augmented_data.response)
@@ -728,19 +726,19 @@ class SimpleTM(torch.nn.Module):
         theta = torch.tensor(
             [
                 *self.nugget.nugget_params.detach(),
-                self.transport_map_kernel.theta_q.detach(),
-                *self.transport_map_kernel.sigma_params.detach(),
-                self.transport_map_kernel.lengthscale.detach(),
+                self.kernel.theta_q.detach(),
+                *self.kernel.sigma_params.detach(),
+                self.kernel.lengthscale.detach(),
             ]
         )
         scal = augmented_data.scales
-        sigmas = self.transport_map_kernel._sigmas(scal)
+        sigmas = self.kernel._sigmas(scal)
         self.intloglik.nug_mult
         # nugMult = self.intloglik.nugMult  # not used
-        smooth = self.transport_map_kernel.smooth
+        smooth = self.kernel.smooth
 
         nug_mean = self.nugget(augmented_data)
-        kernel_result = self.transport_map_kernel.forward(augmented_data, nug_mean)
+        kernel_result = self.kernel.forward(augmented_data, nug_mean)
         nugMean = kernel_result.nug_mean
         chol = kernel_result.GChol
         tmp_res = self.intloglik.precalc(kernel_result, augmented_data.response)

@@ -12,9 +12,9 @@ from batram.legmods import (
     AugmentData,
     Data,
     Nugget,
+    OldTransportMapKernel,
     SimpleTM,
     TransportMapKernel,
-    TransportMapKernelRefactor,
 )
 
 
@@ -138,7 +138,7 @@ def test_kernel_equiv(simple_data: Data) -> None:
 
     theta = legmods.ParameterBox(theta_init)
     nugget = Nugget(theta_init[:2])
-    kernel = TransportMapKernel(theta, fix_m=simple_data.conditioning_sets.shape[1])
+    kernel = OldTransportMapKernel(theta, fix_m=simple_data.conditioning_sets.shape[1])
 
     with torch.no_grad():
         # Currently equiv to calling the following:
@@ -162,8 +162,8 @@ def test_refactored_kernel(simple_data: Data) -> None:
 
     nugget = legmods.Nugget(theta_init[:2])
     theta = legmods.ParameterBox(theta_init)
-    kernel = TransportMapKernel(theta, fix_m=augdata.max_m)
-    refactored_kernel = TransportMapKernelRefactor(theta_init[2:], fix_m=augdata.max_m)
+    kernel = OldTransportMapKernel(theta, fix_m=augdata.max_m)
+    refactored_kernel = TransportMapKernel(theta_init[2:], fix_m=augdata.max_m)
 
     with torch.no_grad():
         nugget_mean = nugget(augdata)
