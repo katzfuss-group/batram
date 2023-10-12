@@ -583,7 +583,8 @@ class SimpleTM(torch.nn.Module):
     ) -> None:
         super().__init__()
 
-        assert linear is False, "Linear TM not implemented yet."
+        if linear:
+            raise ValueError("Linear TM not implemented yet.")
 
         if theta_init is None:
             # This is essentially \log E[y^2] over the spatial dim

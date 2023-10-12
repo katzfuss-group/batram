@@ -222,6 +222,11 @@ def test_init(simple_data) -> None:
         assert torch.allclose(ntp, tp)
 
 
+def test_linear_tm_raises(simple_data) -> None:
+    with pytest.raises(ValueError):
+        SimpleTM(simple_data, linear=True)
+
+
 def test_optim_simNR900() -> None:
     # sanity check if performs silimar to the legacy code
     # the optimizer is not yet converged, but the loss is similar
