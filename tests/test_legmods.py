@@ -192,6 +192,22 @@ def test_optim_simple(simple_data: Data) -> None:
     assert res2.losses[-1] == pytest.approx(res.losses[-1], abs=1e-1)
 
 
+def test_optim_no_theta_init(simple_data: Data) -> None:
+    torch.manual_seed(0)
+
+    theta_init = torch.tensor(
+        [simple_data.response[:, 0].square().mean().log(), 0.3, 0.0, 0.0, 0.1, -1.0]
+    )
+
+    no_theta = SimpleTM(simple_data)
+    use_theta = SimpleTM(simple_data, theta_init.clone())
+
+    no_theta_res = no_theta.fit(100, 0.3, test_data=no_theta.data)
+    use_theta_res = use_theta.fit(100, 0.3, test_data=use_theta.data)
+
+    assert no_theta_res.losses[-1] == pytest.approx(use_theta_res.losses[-1], abs=1e-1)
+
+
 def test_init(simple_data) -> None:
     theta_init = torch.tensor(
         [simple_data.response[:, 0].square().mean().log(), 0.2, 0.0, 0.0, 0.0, -1.0]
