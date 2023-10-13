@@ -631,8 +631,8 @@ class SimpleTM(torch.nn.Module):
     def cond_sample(
         self,
         obs=None,
-        xFix=torch.tensor([]),
-        indLast=None,
+        x_fix=torch.tensor([]),
+        last_ind=None,
         mode: str = "bayes",
         num_samples: int = 1,
     ):
@@ -684,10 +684,10 @@ class SimpleTM(torch.nn.Module):
         if last_ind is None:
             last_ind = N
         # loop over variables/locations
-        xNew = torch.empty((num_samples, N))
-        xNew[:, : xFix.size(0)] = xFix.repeat(num_samples, 1)
-        xNew[:, xFix.size(0) :] = 0.0
-        for i in range(xFix.size(0), indLast):
+        x_new = torch.empty((num_samples, N))
+        x_new[:, : x_fix.size(0)] = x_fix.repeat(num_samples, 1)
+        x_new[:, x_fix.size(0) :] = 0.0
+        for i in range(x_fix.size(0), last_ind):
             # predictive distribution for current sample
             if i == 0:
                 cStar = torch.zeros((num_samples, n))
@@ -695,24 +695,24 @@ class SimpleTM(torch.nn.Module):
             else:
                 ncol = min(i, m)
                 X = data[:, NN[i, :ncol]]
-                XPred = xNew[:, NN[i, :ncol]].unsqueeze(1)
-                cStar = self.transport_map_kernel.kernel_fun(
-                    XPred, theta, sigma_fun(i, theta, scal), smooth, nugMean[i], X
+                XPred = x_new[:, NN[i, :ncol]].unsqueeze(1)
+                cStar = self.kernel._kernel_fun(
+                    XPred, sigmas[i], nugget_mean[i], X
                 ).squeeze(1)
-                prVar = self.transport_map_kernel.kernel_fun(
-                    XPred, theta, sigma_fun(i, theta, scal), smooth, nugMean[i]
+                prVar = self.kernel._kernel_fun(
+                    XPred, sigmas[i], nugget_mean[i]
                 ).squeeze((1, 2))
             cChol = torch.linalg.solve_triangular(
                 chol[i, :, :], cStar.unsqueeze(-1), upper=False
             ).squeeze(-1)
-            meanPred = yTilde[i, :].unsqueeze(0).mul(cChol).sum(1)
+            meanPred = y_tilde[i, :].unsqueeze(0).mul(cChol).sum(1)
             varPredNoNug = prVar - cChol.square().sum(1)
 
             # sample
-            invGDist = InverseGamma(concentration=alphaPost[i], rate=betaPost[i])
+            invGDist = InverseGamma(concentration=alpha_post[i], rate=beta_post[i])
             nugget = invGDist.sample((num_samples,))
             uniNDist = Normal(loc=meanPred, scale=nugget.mul(1.0 + varPredNoNug).sqrt())
-            xNew[:, i] = uniNDist.sample()
+            x_new[:, i] = uniNDist.sample()
 
         return x_new
 
