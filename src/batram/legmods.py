@@ -2,16 +2,19 @@ import logging
 import math
 from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import NamedTuple
+from typing import NamedTuple, cast
 
 import numpy as np
 import torch
 from gpytorch.kernels import MaternKernel
 from matplotlib import pyplot as plt
+from matplotlib.axes import Axes as MPLAxes
 from pyro.distributions import InverseGamma
 from torch.distributions import Normal
 from torch.distributions.studentT import StudentT
 from tqdm import tqdm
+
+from .stopper import PEarlyStopper
 
 
 def nug_fun(i, theta, scales):
@@ -626,7 +629,12 @@ class SimpleTM(torch.nn.Module):
         return loss
 
     def cond_sample(
-        self, obs=None, x_fix=torch.tensor([]), last_ind=None, mode: str = "bayes"
+        self,
+        obs=None,
+        xFix=torch.tensor([]),
+        indLast=None,
+        mode: str = "bayes",
+        num_samples: int = 1,
     ):
         """
         I'm not sure where this should exactly be implemented.
@@ -636,6 +644,11 @@ class SimpleTM(torch.nn.Module):
 
         In any case, this class should expose an interface.
         """
+
+        if obs is not None:
+            raise ValueError(
+                "The argument obs is not used and will be removed in a future version."
+            )
 
         if mode != "bayes":
             raise NotImplementedError("No modes other than bayes implemented")
@@ -671,33 +684,35 @@ class SimpleTM(torch.nn.Module):
         if last_ind is None:
             last_ind = N
         # loop over variables/locations
-        x_new = torch.cat((x_fix, torch.zeros(N - x_fix.size(0))))
-        for i in range(x_fix.size(0), last_ind):
+        xNew = torch.empty((num_samples, N))
+        xNew[:, : xFix.size(0)] = xFix.repeat(num_samples, 1)
+        xNew[:, xFix.size(0) :] = 0.0
+        for i in range(xFix.size(0), indLast):
             # predictive distribution for current sample
             if i == 0:
-                cStar = torch.zeros(n)
-                prVar = torch.tensor(0.0)
+                cStar = torch.zeros((num_samples, n))
+                prVar = torch.zeros((num_samples,))
             else:
                 ncol = min(i, m)
                 X = data[:, NN[i, :ncol]]
-                XPred = x_new[NN[i, :ncol]].unsqueeze(0)
-                cStar = kernel_fun(
-                    XPred, theta, sigmas[i], smooth, nugget_mean[i], X
-                ).squeeze()
-                prVar = kernel_fun(
-                    XPred, theta, sigmas[i], smooth, nugget_mean[i]
-                ).squeeze()
+                XPred = xNew[:, NN[i, :ncol]].unsqueeze(1)
+                cStar = self.transport_map_kernel.kernel_fun(
+                    XPred, theta, sigma_fun(i, theta, scal), smooth, nugMean[i], X
+                ).squeeze(1)
+                prVar = self.transport_map_kernel.kernel_fun(
+                    XPred, theta, sigma_fun(i, theta, scal), smooth, nugMean[i]
+                ).squeeze((1, 2))
             cChol = torch.linalg.solve_triangular(
-                chol[i, :, :], cStar.unsqueeze(1), upper=False
-            ).squeeze()
-            meanPred = y_tilde[i, :].mul(cChol).sum()
-            varPredNoNug = prVar - cChol.square().sum()
+                chol[i, :, :], cStar.unsqueeze(-1), upper=False
+            ).squeeze(-1)
+            meanPred = yTilde[i, :].unsqueeze(0).mul(cChol).sum(1)
+            varPredNoNug = prVar - cChol.square().sum(1)
 
             # sample
-            invGDist = InverseGamma(concentration=alpha_post[i], rate=beta_post[i])
-            nugget = invGDist.sample()
-            uniNDist = Normal(loc=meanPred, scale=nugget.mul(1 + varPredNoNug).sqrt())
-            x_new[i] = uniNDist.sample()
+            invGDist = InverseGamma(concentration=alphaPost[i], rate=betaPost[i])
+            nugget = invGDist.sample((num_samples,))
+            uniNDist = Normal(loc=meanPred, scale=nugget.mul(1.0 + varPredNoNug).sqrt())
+            xNew[:, i] = uniNDist.sample()
 
         return x_new
 
@@ -792,6 +807,7 @@ class SimpleTM(torch.nn.Module):
         test_data: Data | None = None,
         optimizer: None | torch.optim.Optimizer = None,
         scheduler: None | torch.optim.lr_scheduler.LRScheduler = None,
+        stopper: None | PEarlyStopper = None,
         silent: bool = False,
     ):
         """
@@ -812,6 +828,8 @@ class SimpleTM(torch.nn.Module):
         scheduler
             Learning rate scheduler to use. If None, CosineAnnealingLR
             is used with default optimizer.
+        stopper
+            An early stopper. If None, no early stopping is used. Requires test data.
         silent
             If True, do not print progress.
         """
@@ -826,6 +844,9 @@ class SimpleTM(torch.nn.Module):
                 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
                     optimizer, T_max=num_iter
                 )
+
+        if stopper is not None and test_data is None:
+            raise ValueError("Cannot use stopper without test data.")
 
         if batch_size is None:
             batch_size = self.data.response.shape[1]
@@ -847,8 +868,7 @@ class SimpleTM(torch.nn.Module):
             {k: np.copy(v.detach().numpy()) for k, v in self.named_tracked_values()}
         ]
 
-        tqdm_obj = tqdm(range(num_iter), disable=silent)
-        for _ in tqdm_obj:
+        for _ in (tqdm_obj := tqdm(range(num_iter), disable=silent)):
             # create batches
             if batch_size == data_size:
                 idxes = [torch.arange(data_size)]
@@ -893,6 +913,15 @@ class SimpleTM(torch.nn.Module):
             )
 
             tqdm_obj.set_description(desc)
+
+            if stopper is not None:
+                state = {k: v.detach().clone() for k, v in self.state_dict().items()}
+                stop = stopper.step(test_losses[-1], state)
+                if stop:
+                    # restore best state
+                    self.load_state_dict(stopper.best_state())
+                    # and break
+                    break
 
         param_chain = {}
         for k in parameters[0].keys():
@@ -943,7 +972,7 @@ class FitResult:
         legend_handle = [p1]
 
         if self.test_losses is not None:
-            twin = ax.twinx()
+            twin = cast(MPLAxes, ax.twinx())
             (p2,) = twin.plot(self.test_losses, "C1", label="Test Loss", **kwargs)
             legend_handle.append(p2)
             twin.set_ylabel("Test Loss")
@@ -953,11 +982,11 @@ class FitResult:
             start_idx = int(0.8 * end_idx)
             inset_iterations = np.arange(start_idx, end_idx)
 
-            inset = ax.inset_axes([0.40, 0.45, 0.45, 0.45])
+            inset = ax.inset_axes((0.5, 0.5, 0.45, 0.45))
             inset.plot(inset_iterations, self.losses[start_idx:], "C0", **kwargs)
 
             if self.test_losses is not None:
-                insert_twim = inset.twinx()
+                insert_twim = cast(MPLAxes, inset.twinx())
                 insert_twim.plot(
                     inset_iterations, self.test_losses[start_idx:], "C1", **kwargs
                 )
