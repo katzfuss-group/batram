@@ -657,19 +657,9 @@ class SimpleTM(torch.nn.Module):
 
         data = self.data.response
         NN = self.data.conditioning_sets
-        theta = torch.tensor(
-            [
-                *self.nugget.nugget_params.detach(),
-                self.kernel.theta_q.detach(),
-                *self.kernel.sigma_params.detach(),
-                self.kernel.lengthscale.detach(),
-            ]
-        )
         scales = augmented_data.scales
         sigmas = self.kernel._sigmas(scales)
         self.intloglik.nug_mult
-        # nugMult = self.intloglik.nugMult  # not used
-        smooth = self.kernel.smooth
 
         nug_mean = self.nugget(augmented_data)
         kernel_result = self.kernel.forward(augmented_data, nug_mean)
