@@ -103,6 +103,13 @@ def test_legmods_cond_samp_bayes(simple_data: Data) -> None:
     assert sample_abs_sum == pytest.approx(65.3635, abs=1e-2)
 
 
+def test_legmods_cond_samp_multi_samples(simple_data: Data) -> None:
+    tm = SimpleTM(simple_data)
+    with torch.no_grad():
+        sample = tm.cond_sample(num_samples=10)
+    assert sample.shape == (10, simple_data.response.shape[1])
+
+
 def test_legmods_score(simple_data: Data) -> None:
     theta_init = torch.tensor(
         [simple_data.response[:, 0].square().mean().log(), 0.3, 0.0, 0.0, 0.1, -1.0]
