@@ -630,10 +630,8 @@ class SimpleTM(torch.nn.Module):
 
     def cond_sample(
         self,
-        obs=None,
         x_fix=torch.tensor([]),
         last_ind=None,
-        mode: str = "bayes",
         num_samples: int = 1,
     ):
         """
@@ -644,14 +642,6 @@ class SimpleTM(torch.nn.Module):
 
         In any case, this class should expose an interface.
         """
-
-        if obs is not None:
-            raise ValueError(
-                "The argument obs is not used and will be removed in a future version."
-            )
-
-        if mode != "bayes":
-            raise NotImplementedError("No modes other than bayes implemented")
 
         augmented_data: AugmentedData = self.augment_data(self.data, None)
 
@@ -706,7 +696,7 @@ class SimpleTM(torch.nn.Module):
 
         return x_new
 
-    def score(self, obs, x_fix=torch.tensor([]), last_ind=None, mode: str = "score"):
+    def score(self, obs, x_fix=torch.tensor([]), last_ind=None):
         """
         I'm not sure where this should exactly be implemented.
 
@@ -718,9 +708,6 @@ class SimpleTM(torch.nn.Module):
         Also, this function shares a lot of code with cond sample. that should
         be refactored
         """
-
-        if mode != "score":
-            raise NotImplementedError("No modes other than 'score' implemented.")
 
         augmented_data: AugmentedData = self.augment_data(self.data, None)
 
