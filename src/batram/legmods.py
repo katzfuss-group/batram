@@ -709,6 +709,9 @@ class SimpleTM(torch.nn.Module):
         be refactored
         """
 
+        if isinstance(last_ind, int) and last_ind < x_fix.size(-1):
+            raise ValueError("last_ind must be larger than conditioned field x_fix.")
+
         augmented_data: AugmentedData = self.augment_data(self.data, None)
 
         data = self.data.response
