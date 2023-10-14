@@ -77,7 +77,7 @@ def kernel_fun(X1, theta, sigma, smooth, nuggetMean=None, X2=None):
     X2s = X2.mul(scaling_fun(torch.arange(1, N + 1).unsqueeze(0), theta))
     lin = X1s @ X2s.mT
     MaternObj = MaternKernel(smooth)
-    MaternObj._set_lengthscale(1.0)
+    MaternObj._set_lengthscale(torch.tensor(1.0))
     MaternObj.requires_grad_(False)
     lenScal = range_fun(theta) * math.sqrt(2 * smooth)
     nonlin = MaternObj.forward(X1s.div(lenScal), X2s.div(lenScal))
@@ -186,12 +186,16 @@ class AugmentedData:
     data: Data
 
     @property
-    def response(self):
+    def response(self) -> torch.Tensor:
         return self.augmented_response[:, :, 0]
 
     @property
-    def response_neighbor_values(self):
+    def response_neighbor_values(self) -> torch.Tensor:
         return self.augmented_response[:, :, 1:]
+
+    @property
+    def max_m(self) -> int:
+        return self.augmented_response.shape[-1] - 1
 
 
 class AugmentData(torch.nn.Module):
@@ -232,6 +236,8 @@ class KernelResult:
     nug_mean: torch.Tensor
 
 
+# TODO: Deprecate / remove
+# The nugget and kernel refactors make this obsolete.
 class ParameterBox(torch.nn.Module):
     def __init__(self, theta) -> None:
         super().__init__()
@@ -242,19 +248,164 @@ class ParameterBox(torch.nn.Module):
 
 
 class Nugget(torch.nn.Module):
-    def __init__(self, theta: ParameterBox) -> None:
+    def __init__(self, nugget_params: torch.Tensor) -> None:
         super().__init__()
-        self.theta = theta
+        assert nugget_params.shape == (2,)
+        self.nugget_params = torch.nn.Parameter(nugget_params)
 
     def forward(self, data: AugmentedData) -> torch.Tensor:
-        theta = self.theta()
-        index = torch.arange(data.scales.numel())
-        nugget_mean = nug_fun(index, theta, data.scales)
+        theta = self.nugget_params
+        nugget_mean = (theta[0] + theta[1] * data.scales.log()).exp()
         nugget_mean = torch.relu(nugget_mean.sub(1e-5)).add(1e-5)
         return nugget_mean
 
 
+# TODO: Promote to TransportMapKernel
+# This was put in to preserve the existing test suite. We can remove the old
+# test suite once we are satisfied with this implementation. This integration
+# does not eliminate the need for the helper functions at the start of the file
+# but it is a step in that direction. (The helpers are still used in the
+# `cond_samp` and `score` methods of `SimpleTM`.) This rewrite allows us to
+# more easily extend the covariates case and simplifies how parameters are
+# managed throughout the model.
 class TransportMapKernel(torch.nn.Module):
+    """A temporary class to refactor the `TransportMapKernel`.
+
+    Once the refactor is complete, replace the `TransportMapKernel` with this
+    class. To complete the refactor, we will need to modify the `SimpleTM`
+    constructor slightly.
+    """
+
+    def __init__(
+        self,
+        kernel_params: torch.Tensor,
+        smooth: float = 1.5,
+        fix_m: int | None = None,
+    ) -> None:
+        super().__init__()
+
+        assert kernel_params.numel() == 4
+        self.theta_q = torch.nn.Parameter(kernel_params[0])
+        self.sigma_params = torch.nn.Parameter(kernel_params[1:3])
+        self.lengthscale = torch.nn.Parameter(kernel_params[-1])
+
+        self.fix_m = fix_m
+        self.smooth = smooth
+        self._tracked_values: dict["str", torch.Tensor] = {}
+
+        matern = MaternKernel(smooth)
+        matern._set_lengthscale(torch.tensor(1.0))
+        matern.requires_grad_(False)
+        self._kernel = matern
+
+    def _sigmas(self, scales: torch.Tensor) -> torch.Tensor:
+        """Computes nonlinear scales for the kernel."""
+        params = self.sigma_params
+        return torch.exp(params[0] + params[1] * scales.log())
+
+    def _scale(self, k: torch.Tensor) -> torch.Tensor:
+        """Computes scales of nearest neighbors in the kernel."""
+        theta_pos = torch.exp(self.theta_q)
+        return torch.exp(-0.5 * k * theta_pos)
+
+    def _range(self) -> torch.Tensor:
+        """Computes the lengthscale of the kernel."""
+        return self.lengthscale.exp()
+
+    def _m_threshold(self, max_m: int) -> torch.Tensor:
+        """Computes the size of the conditioning sets."""
+        rng = torch.arange(max_m) + 1
+        mask = self._scale(rng) >= 0.01
+        m = mask.sum()
+
+        if m <= 0:
+            raise RuntimeError(
+                f"Size of conditioning set not positive; m = {m.item()}."
+            )
+        if m > max_m:
+            logging.warning(
+                f"Required size of the conditioning sets m = {m.item()} is "
+                f"greater than the maximum number of neighbors {max_m = } in "
+                "the pre-calculated conditioning sets."
+            )
+            m = torch.tensor(max_m)
+        return m
+
+    def _determine_m(self, max_m: int) -> torch.Tensor:
+        m: torch.Tensor
+        if self.fix_m is None:
+            m = self._m_threshold(max_m)
+        else:
+            m = torch.tensor(self.fix_m)
+
+        return m
+
+    def _kernel_fun(
+        self,
+        x1: torch.Tensor,
+        sigmas: torch.Tensor,
+        nug_mean: torch.Tensor,
+        x2: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Computes the transport map kernel."""
+        k = torch.arange(x1.shape[-1]) + 1
+        scaling = self._scale(k)
+
+        _x1 = x1 * scaling
+        _x2 = _x1 if x2 is None else x2 * scaling
+        linear = _x1 @ _x2.mT
+
+        ls = self._range() * math.sqrt(2 * self.smooth)
+        nonlinear = self._kernel(_x1 / ls, _x2 / ls).to_dense()
+        out = (linear + sigmas**2 * nonlinear) / nug_mean
+        return out
+
+    def forward(self, data: AugmentedData, nug_mean: torch.Tensor) -> KernelResult:
+        """Computes with internalized kernel params instead of ParameterBox."""
+        max_m = data.max_m
+        m = self._determine_m(max_m)
+        self._tracked_values["m"] = m
+        assert m <= max_m
+
+        x = data.augmented_response[..., 1 : (m + 1)]
+        x = torch.where(torch.isnan(x), 0.0, x)
+        # Want the spatial dim in the first position for kernel computations,
+        # so data follow (..., N, n, fixed_m) instead of (..., n, N, m) as in
+        # the original kernel implementation. Doing this with an eye towards
+        # parallelism.
+        x = x.permute(-2, -3, -1)
+
+        nug_mean_reshaped = nug_mean.reshape(-1, 1, 1)
+        sigmas = self._sigmas(data.scales).reshape(-1, 1, 1)
+        k = self._kernel_fun(x, sigmas, nug_mean_reshaped)
+        eyes = torch.eye(k.shape[-1]).expand_as(k)
+        g = k + eyes
+
+        g[data.batch_idx == 0] = torch.eye(k.shape[-1])
+        try:
+            g_chol = torch.linalg.cholesky(g)
+        except RuntimeError as e:
+            # One contrast between the errors we return here and the ones in the
+            # other function is that here we don't know which Cholesky factor
+            # failed based on this message. It would be good to inherit the
+            # torch.linalg.LinAlgError and make a more informative error message
+            # with it.
+            raise RuntimeError("Failed to compute Cholesky decomposition of G.") from e
+
+        # Here we have talked about changing the response to be only the g
+        # matrices or simply the kernel. This requires further thought still.
+        return KernelResult(g, g_chol, nug_mean)
+
+
+# TODO: Deprecate / remove
+# This class becomes obsolete once we accept `TransportMapKernelRefactor`.
+class OldTransportMapKernel(torch.nn.Module):
+    """Initial reimplementation of the transport map kernel. To be deprecated.
+
+    Complete tests with `TransportMapKernelRefactor` and then remove from the
+    package.
+    """
+
     def __init__(
         self, theta: ParameterBox, smooth: float = 1.5, fix_m: int | None = None
     ) -> None:
@@ -264,7 +415,7 @@ class TransportMapKernel(torch.nn.Module):
         self.smooth = smooth
         self._tracked_values: dict["str", torch.Tensor] = {}
 
-    def _determin_m(self, theta, max_m):
+    def _determin_m(self, theta, max_m) -> torch.Tensor:
         m: torch.Tensor
         if self.fix_m is None:
             m = m_threshold(theta, max_m)
@@ -378,29 +529,28 @@ class _PreCalcLogLik(NamedTuple):
 
 
 class IntLogLik(torch.nn.Module):
-    def __init__(self, theta: ParameterBox, nugMult: float = 4.0):
+    def __init__(self, nug_mult: float = 4.0):
         super().__init__()
-        self.nugMult = torch.tensor(4.0)
-        self.theta = theta
+        self.nug_mult = torch.tensor(nug_mult)
 
     def precalc(self, kernel_result: KernelResult, response) -> _PreCalcLogLik:
-        nugSd = kernel_result.nug_mean.mul(self.nugMult)  # shape (N,)
-        alpha = kernel_result.nug_mean.pow(2).div(nugSd.pow(2)).add(2)  # shape (N,)
+        nug_sd = kernel_result.nug_mean.mul(self.nug_mult)  # shape (N,)
+        alpha = kernel_result.nug_mean.pow(2).div(nug_sd.pow(2)).add(2)  # shape (N,)
         beta = kernel_result.nug_mean.mul(alpha.sub(1))  # shape (N,)
 
         n = response.shape[0]
-        yTilde = torch.linalg.solve_triangular(
+        y_tilde = torch.linalg.solve_triangular(
             kernel_result.GChol, response.t().unsqueeze(-1), upper=False
         ).squeeze()  # (N, n)
-        alphaPost = alpha.add(n / 2)  # (N),
-        betaPost = beta + yTilde.square().sum(dim=1).div(2)  # (N,)
+        alpha_post = alpha.add(n / 2)  # (N),
+        beta_post = beta + y_tilde.square().sum(dim=1).div(2)  # (N,)
         return _PreCalcLogLik(
-            nug_sd=nugSd,
+            nug_sd=nug_sd,
             alpha=alpha,
             beta=beta,
-            alpha_post=alphaPost,
-            beta_post=betaPost,
-            y_tilde=yTilde,
+            alpha_post=alpha_post,
+            beta_post=beta_post,
+            y_tilde=y_tilde,
         )
 
     def forward(self, data: AugmentedData, kernel_result: KernelResult) -> torch.Tensor:
@@ -429,23 +579,27 @@ class SimpleTM(torch.nn.Module):
     def __init__(
         self,
         data: Data,
-        theta_init: torch.Tensor,
-        linear=False,
+        theta_init: None | torch.Tensor = None,
+        linear: bool = False,
         smooth: float = 1.5,
-        nugMult: float = 4.0,
-        new_method: bool = True,
+        nug_mult: float = 4.0,
     ) -> None:
         super().__init__()
 
-        assert linear is False, "Linear TM not implemented yet."
+        if linear:
+            raise ValueError("Linear TM not implemented yet.")
 
-        self.theta = ParameterBox(theta_init)
+        if theta_init is None:
+            # This is essentially \log E[y^2] over the spatial dim
+            # to initialize the nugget mean.
+            log_2m = data.response[:, 0].square().mean().log()
+            theta_init = torch.tensor([log_2m, 0.2, 0.0, 0.0, 0.0, -1.0])
+
         self.augment_data = AugmentData()
-        self.nugget = Nugget(self.theta)
-        self.transport_map_kernel = TransportMapKernel(self.theta, smooth=smooth)
-        self.intloglik = IntLogLik(self.theta, nugMult=nugMult)
+        self.nugget = Nugget(theta_init[:2])
+        self.kernel = TransportMapKernel(theta_init[2:], smooth=smooth)
+        self.intloglik = IntLogLik(nug_mult=nug_mult)
         self.data = data
-        self._new_method = new_method
         self._tracked_values: dict[str, torch.Tensor] = {}
 
     def named_tracked_values(
@@ -468,9 +622,7 @@ class SimpleTM(torch.nn.Module):
 
         aug_data: AugmentedData = self.augment_data(data, batch_idx)
         nugget = self.nugget(aug_data)
-        kernel_result = self.transport_map_kernel(
-            aug_data, nugget, new_method=self._new_method
-        )
+        kernel_result = self.kernel(aug_data, nugget)
         intloglik = self.intloglik(aug_data, kernel_result)
 
         loss = -aug_data.data_size / aug_data.batch_size * intloglik.sum()
@@ -478,10 +630,8 @@ class SimpleTM(torch.nn.Module):
 
     def cond_sample(
         self,
-        obs=None,
-        xFix=torch.tensor([]),
-        indLast=None,
-        mode: str = "bayes",
+        x_fix=torch.tensor([]),
+        last_ind=None,
         num_samples: int = 1,
     ):
         """
@@ -493,41 +643,31 @@ class SimpleTM(torch.nn.Module):
         In any case, this class should expose an interface.
         """
 
-        if obs is not None:
-            raise ValueError(
-                "The argument obs is not used and will be removed in a future version."
-            )
-
-        if mode != "bayes":
-            raise NotImplementedError("No modes other than bayes implemented")
-
         augmented_data: AugmentedData = self.augment_data(self.data, None)
 
         data = self.data.response
         NN = self.data.conditioning_sets
-        theta = self.theta()
-        scal = augmented_data.scales
-        self.intloglik.nugMult
-        # nugMult = self.intloglik.nugMult  # not used
-        smooth = self.transport_map_kernel.smooth
+        scales = augmented_data.scales
+        sigmas = self.kernel._sigmas(scales)
+        self.intloglik.nug_mult
 
         nug_mean = self.nugget(augmented_data)
-        kernel_result = self.transport_map_kernel.forward(augmented_data, nug_mean)
-        nugMean = kernel_result.nug_mean
+        kernel_result = self.kernel.forward(augmented_data, nug_mean)
+        nugget_mean = kernel_result.nug_mean
         chol = kernel_result.GChol
         tmp_res = self.intloglik.precalc(kernel_result, augmented_data.response)
-        yTilde = tmp_res.y_tilde
-        betaPost = tmp_res.beta_post
-        alphaPost = tmp_res.alpha_post
+        y_tilde = tmp_res.y_tilde
+        beta_post = tmp_res.beta_post
+        alpha_post = tmp_res.alpha_post
         n, N = data.shape
         m = NN.shape[1]
-        if indLast is None:
-            indLast = N
+        if last_ind is None:
+            last_ind = N
         # loop over variables/locations
-        xNew = torch.empty((num_samples, N))
-        xNew[:, : xFix.size(0)] = xFix.repeat(num_samples, 1)
-        xNew[:, xFix.size(0) :] = 0.0
-        for i in range(xFix.size(0), indLast):
+        x_new = torch.empty((num_samples, N))
+        x_new[:, : x_fix.size(0)] = x_fix.repeat(num_samples, 1)
+        x_new[:, x_fix.size(0) :] = 0.0
+        for i in range(x_fix.size(0), last_ind):
             # predictive distribution for current sample
             if i == 0:
                 cStar = torch.zeros((num_samples, n))
@@ -535,28 +675,28 @@ class SimpleTM(torch.nn.Module):
             else:
                 ncol = min(i, m)
                 X = data[:, NN[i, :ncol]]
-                XPred = xNew[:, NN[i, :ncol]].unsqueeze(1)
-                cStar = self.transport_map_kernel.kernel_fun(
-                    XPred, theta, sigma_fun(i, theta, scal), smooth, nugMean[i], X
+                XPred = x_new[:, NN[i, :ncol]].unsqueeze(1)
+                cStar = self.kernel._kernel_fun(
+                    XPred, sigmas[i], nugget_mean[i], X
                 ).squeeze(1)
-                prVar = self.transport_map_kernel.kernel_fun(
-                    XPred, theta, sigma_fun(i, theta, scal), smooth, nugMean[i]
+                prVar = self.kernel._kernel_fun(
+                    XPred, sigmas[i], nugget_mean[i]
                 ).squeeze((1, 2))
             cChol = torch.linalg.solve_triangular(
                 chol[i, :, :], cStar.unsqueeze(-1), upper=False
             ).squeeze(-1)
-            meanPred = yTilde[i, :].unsqueeze(0).mul(cChol).sum(1)
+            meanPred = y_tilde[i, :].unsqueeze(0).mul(cChol).sum(1)
             varPredNoNug = prVar - cChol.square().sum(1)
 
             # sample
-            invGDist = InverseGamma(concentration=alphaPost[i], rate=betaPost[i])
+            invGDist = InverseGamma(concentration=alpha_post[i], rate=beta_post[i])
             nugget = invGDist.sample((num_samples,))
             uniNDist = Normal(loc=meanPred, scale=nugget.mul(1.0 + varPredNoNug).sqrt())
-            xNew[:, i] = uniNDist.sample()
+            x_new[:, i] = uniNDist.sample()
 
-        return xNew
+        return x_new
 
-    def score(self, obs, xFix=torch.tensor([]), indLast=None, mode: str = "score"):
+    def score(self, obs, x_fix=torch.tensor([]), last_ind=None):
         """
         I'm not sure where this should exactly be implemented.
 
@@ -569,8 +709,8 @@ class SimpleTM(torch.nn.Module):
         be refactored
         """
 
-        if mode != "score":
-            raise NotImplementedError("No modes other than 'score' implemented.")
+        if isinstance(last_ind, int) and last_ind < x_fix.size(-1):
+            raise ValueError("last_ind must be larger than conditioned field x_fix.")
 
         augmented_data: AugmentedData = self.augment_data(self.data, None)
 
@@ -578,27 +718,35 @@ class SimpleTM(torch.nn.Module):
         NN = self.data.conditioning_sets
         # response = augmented_data.response
         # response_neighbor_values = augmented_data.response_neighbor_values
-        theta = self.theta()
-        scal = augmented_data.scales
-        self.intloglik.nugMult
+        theta = torch.tensor(
+            [
+                *self.nugget.nugget_params.detach(),
+                self.kernel.theta_q.detach(),
+                *self.kernel.sigma_params.detach(),
+                self.kernel.lengthscale.detach(),
+            ]
+        )
+        scales = augmented_data.scales
+        sigmas = self.kernel._sigmas(scales)
+        self.intloglik.nug_mult
         # nugMult = self.intloglik.nugMult  # not used
-        smooth = self.transport_map_kernel.smooth
+        smooth = self.kernel.smooth
 
         nug_mean = self.nugget(augmented_data)
-        kernel_result = self.transport_map_kernel.forward(augmented_data, nug_mean)
-        nugMean = kernel_result.nug_mean
+        kernel_result = self.kernel.forward(augmented_data, nug_mean)
+        nugget_mean = kernel_result.nug_mean
         chol = kernel_result.GChol
         tmp_res = self.intloglik.precalc(kernel_result, augmented_data.response)
-        yTilde = tmp_res.y_tilde
-        betaPost = tmp_res.beta_post
-        alphaPost = tmp_res.alpha_post
+        y_tilde = tmp_res.y_tilde
+        beta_post = tmp_res.beta_post
+        alpha_post = tmp_res.alpha_post
         n, N = data.shape
         m = NN.shape[1]
-        if indLast is None:
-            indLast = N
+        if last_ind is None:
+            last_ind = N
         # loop over variables/locations
-        scr = torch.zeros(N)
-        for i in range(xFix.size(0), indLast):
+        score = torch.zeros(N)
+        for i in range(x_fix.size(0), last_ind):
             # predictive distribution for current sample
             if i == 0:
                 cStar = torch.zeros(n)
@@ -609,27 +757,27 @@ class SimpleTM(torch.nn.Module):
                 XPred = obs[NN[i, :ncol]].unsqueeze(
                     0
                 )  # this line is different than in cond_sampl
-                cStar = self.transport_map_kernel.kernel_fun(
-                    XPred, theta, sigma_fun(i, theta, scal), smooth, nugMean[i], X
+                cStar = kernel_fun(
+                    XPred, theta, sigmas[i], smooth, nugget_mean[i], X
                 ).squeeze()
-                prVar = self.transport_map_kernel.kernel_fun(
-                    XPred, theta, sigma_fun(i, theta, scal), smooth, nugMean[i]
+                prVar = kernel_fun(
+                    XPred, theta, sigmas[i], smooth, nugget_mean[i]
                 ).squeeze()
             cChol = torch.linalg.solve_triangular(
                 chol[i, :, :], cStar.unsqueeze(1), upper=False
             ).squeeze()
-            meanPred = yTilde[i, :].mul(cChol).sum()
+            meanPred = y_tilde[i, :].mul(cChol).sum()
             varPredNoNug = prVar - cChol.square().sum()
 
             # score
-            initVar = betaPost[i] / alphaPost[i] * (1 + varPredNoNug)
-            STDist = StudentT(2 * alphaPost[i])
-            scr[i] = (
+            initVar = beta_post[i] / alpha_post[i] * (1 + varPredNoNug)
+            STDist = StudentT(2 * alpha_post[i])
+            score[i] = (
                 STDist.log_prob((obs[i] - meanPred) / initVar.sqrt())
                 - 0.5 * initVar.log()
             )
 
-        return scr[xFix.size(0) :].sum()
+        return score[x_fix.size(0) :].sum()
 
     def fit(
         self,
@@ -765,6 +913,7 @@ class SimpleTM(torch.nn.Module):
 
         return FitResult(
             model=self,
+            max_m=self.data.conditioning_sets.shape[-1],
             losses=np.array(losses),
             parameters=parameters[-1],
             test_losses=np.array(test_losses) if test_data is not None else None,
@@ -780,6 +929,7 @@ class FitResult:
     """
 
     model: SimpleTM
+    max_m: int
     losses: np.ndarray
     test_losses: None | np.ndarray
     parameters: dict[str, np.ndarray]
@@ -824,5 +974,49 @@ class FitResult:
         ax.set_xlabel("Iteration")
         ax.set_ylabel("Train Loss")
         ax.legend(handles=legend_handle, loc="lower right", bbox_to_anchor=(0.925, 0.2))
+
+        return ax
+
+    def plot_params(self, ax: plt.Axes | None = None, **kwargs) -> plt.Axes:
+        if ax is None:
+            fig, ax = plt.subplots(1, 1)
+
+        ax.plot(
+            self.param_chain["nugget.nugget_params"],
+            label=[f"nugget {i}" for i in range(2)],
+            **kwargs,
+        )
+        ax.plot(
+            self.param_chain["kernel.theta_q"],
+            label="neighbors scale",
+            **kwargs,
+        )
+        ax.plot(
+            self.param_chain["kernel.sigma_params"],
+            label=[f"sigma {i}" for i in range(2)],
+            **kwargs,
+        )
+        ax.plot(
+            self.param_chain["kernel.lengthscale"],
+            label="lengthscale",
+            **kwargs,
+        )
+        ax.set_xlabel("Epoch")
+        ax.set_ylabel("Raw Parameter Value")
+        ax.legend()
+
+        return ax
+
+    def plot_neighbors(self, ax: plt.Axes | None = None, **kwargs) -> plt.Axes:
+        if ax is None:
+            _, ax = plt.subplots(1, 1)
+
+        m = self.tracked_chain["kernel.m"]
+        epochs = np.arange(m.size, **kwargs)
+        ax.step(epochs, m)
+        ax.set_title("Nearest neighbors through optimization")
+        ax.set_xlabel("Epoch")
+        ax.set_ylabel("Number of nearest neighbors (m)")
+        ax.set_ylim(0, self.max_m)
 
         return ax
