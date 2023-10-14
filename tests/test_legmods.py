@@ -122,6 +122,32 @@ def test_legmods_score(simple_data: Data) -> None:
     assert score == pytest.approx(-49.6006, abs=1e-3)
 
 
+def test_legmods_score_with_xfix(simple_data: Data) -> None:
+    tm = SimpleTM(simple_data)
+    x_fix = simple_data.response[0, :]
+    with torch.no_grad():
+        score = tm.score(simple_data.response[0, :], x_fix)
+    assert score == pytest.approx(0.0, 1e-5)
+
+
+def test_legmods_score_last_index(simple_data: Data) -> None:
+    tm = SimpleTM(simple_data)
+    last_index = 50
+    obs = simple_data.response[0, :]
+    with torch.no_grad():
+        score = tm.score(obs, last_ind=last_index)
+    assert score == pytest.approx(-31.9082, 1e-5)
+
+
+def test_legmods_score_xfix_greater_than_last_ind(simple_data: Data) -> None:
+    tm = SimpleTM(simple_data)
+    last_index = 5
+    obs = simple_data.response[0, :]
+    x_fix = simple_data.response[1, :6]
+    with torch.no_grad(), pytest.raises(ValueError):
+        tm.score(obs, x_fix, last_ind=last_index)
+
+
 def test_legmods_nugget_mean(simple_data: Data) -> None:
     augdata = AugmentData()(simple_data)
     theta_init = torch.tensor(
