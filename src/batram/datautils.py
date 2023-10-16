@@ -1,5 +1,5 @@
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Optional, Sequence
 
 import torch
 from torch.utils import data
@@ -72,7 +72,7 @@ class MinibatchSample:
     response: torch.Tensor
     augmented_response: torch.Tensor
     scales: torch.Tensor
-    x: Optional[torch.Tensor] = None
+    x: torch.Tensor | None = None
 
     def to(self, device, dtype):
         """Move the data to the specified device and dtype."""
@@ -121,7 +121,7 @@ class Dataset(data.Dataset):
         locs: torch.Tensor,
         response: torch.Tensor,
         condsets: torch.Tensor,
-        x: None | torch.Tensor,
+        x: None | torch.Tensor = None,
     ):
         """Initialize the data container. Reindexes data used in the model.
 
@@ -151,7 +151,7 @@ class Dataset(data.Dataset):
         self.response = response.unsqueeze(-1)
         self.augmented_response = augmented_response
         self.scales = scales.reshape(-1, 1, 1)
-        self.x = x if x else None
+        self.x = x if x is not None else None
         self.permute_dims()
 
     @property
