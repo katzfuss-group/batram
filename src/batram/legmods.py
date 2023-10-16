@@ -14,6 +14,7 @@ from torch.distributions import Normal
 from torch.distributions.studentT import StudentT
 from tqdm import tqdm
 
+from .base_functions import compute_scale
 from .stopper import PEarlyStopper
 
 
@@ -83,24 +84,6 @@ def kernel_fun(X1, theta, sigma, smooth, nuggetMean=None, X2=None):
     nonlin = MaternObj.forward(X1s.div(lenScal), X2s.div(lenScal))
     nonlin = sigma.pow(2).reshape(-1, 1, 1) * nonlin
     return (lin + nonlin).div(nuggetMean)
-
-
-def compute_scale(ordered_locs, NN):
-    """Computes scaling for the data.
-
-    Args:
-        ordered_locs: Locations of the data. shape (N, d)
-            Each row is one location in a d-dimensional space.
-
-        NN: Conditioning sets of the data. Shape (N, m)
-            Each row represents one location with references to the m nearest
-            neighbors. -1 indicates not to condition on more neighbors.
-    """
-    ordered_locs = torch.as_tensor(ordered_locs)
-    scal = (ordered_locs[1:, :] - ordered_locs[NN[1:, 0], :]).square().sum(1).sqrt()
-    scal = torch.cat((scal[0].square().div(scal[4]).unsqueeze(0), scal))
-    scal = scal.div(scal[0])
-    return scal
 
 
 @dataclass
