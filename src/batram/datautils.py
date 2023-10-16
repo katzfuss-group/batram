@@ -179,7 +179,7 @@ class Dataset(data.Dataset):
         if self.x:
             x_repr = self.x.shape
         else:
-            x_repr = "None"
+            x_repr = None
         return (
             f"CovariatesData(\n"
             f"  locs = {self.locs.shape},\n"
