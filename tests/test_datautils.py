@@ -55,7 +55,7 @@ def test_datautils_dataset_x_none(data: Dataset) -> None:
     assert data.x is None
 
 
-def test_datautils_dataset_x_not_none(raw_data: Dataset) -> None:
+def test_datautils_dataset_x_not_none(raw_data: dict) -> None:
     x = torch.randn(100, 1, 1)
     new_data = Dataset(
         locs=raw_data["ordered_locs"],
