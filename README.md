@@ -36,8 +36,9 @@ An initial Python
 by Jian Cao. This work was supported by XXX [grant numbers xxxx, xxxx], YYY
 [grant number yyyy]; and ZZZZ [grant number zzzz].
 
-## A logo
+## Logos
 
-- BatRam
-
-  ![Image from stable diffusion](https://user-images.githubusercontent.com/603509/228377927-bbdf6cde-80cf-455b-8633-b7638e1b0327.png)
+- ![Image from stable diffusion](https://user-images.githubusercontent.com/603509/228377927-bbdf6cde-80cf-455b-8633-b7638e1b0327.png)
+- ![Logo1](./logos/DALLE_2023-10-16_10.41.41.png)
+- ![Logo2](./logos/DALLE_2023-10-16_10.42.05.png)
+- ![Logo3](./logos/DALLE_2023-10-16_10.42.10.png)
