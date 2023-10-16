@@ -1,3 +1,5 @@
+from unittest.mock import patch
+
 import numpy as np
 import pytest
 import torch
@@ -33,12 +35,14 @@ def data(raw_data: dict) -> Dataset:
 
 
 def test_datautils_pin() -> None:
-    x = torch.randn(10, 1, 1)
-    assert x.device.type == "cpu"
-    assert x.dtype == torch.float32
-    pinned_x = _pin(x, pin_memory=True)
-    assert all(pinned_x == x)
-    assert pinned_x.device.type == x.device.type
+    with patch("torch.cuda.is_available") as mock_cuda:
+        mock_cuda.return_value = True
+        x = torch.randn(10, 1, 1)
+        assert x.device.type == "cpu"
+        assert x.dtype == torch.float32
+        pinned_x = _pin(x, pin_memory=True)
+        assert all(pinned_x == x)
+        assert pinned_x.device.type == x.device.type
 
 
 def test_datautils_dataset_has_attributes(data: Dataset) -> None:
