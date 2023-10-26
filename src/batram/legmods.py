@@ -517,9 +517,14 @@ class IntLogLik(torch.nn.Module):
         self.nug_mult = torch.tensor(nug_mult)
 
     def precalc(self, kernel_result: KernelResult, response) -> _PreCalcLogLik:
-        nug_sd = kernel_result.nug_mean.mul(self.nug_mult)  # shape (N,)
-        alpha = kernel_result.nug_mean.pow(2).div(nug_sd.pow(2)).add(2)  # shape (N,)
-        beta = kernel_result.nug_mean.mul(alpha.sub(1))  # shape (N,)
+        nug_mean = kernel_result.nug_mean.squeeze()  # had shape (N, 1, 1)
+        nug_sd = nug_mean.mul(self.nug_mult).squeeze()  # shape (N,)
+        alpha = nug_mean.pow(2).div(nug_sd.pow(2)).add(2)  # shape (N,)
+        beta = nug_mean.mul(alpha.sub(1))  # shape (N,)
+
+        assert nug_sd.shape == (response.shape[1],)
+        assert alpha.shape == (response.shape[1],)
+        assert beta.shape == (response.shape[1],)
 
         n = response.shape[0]
         y_tilde = torch.linalg.solve_triangular(
@@ -527,6 +532,9 @@ class IntLogLik(torch.nn.Module):
         ).squeeze()  # (N, n)
         alpha_post = alpha.add(n / 2)  # (N),
         beta_post = beta + y_tilde.square().sum(dim=1).div(2)  # (N,)
+
+        assert alpha_post.shape == (response.shape[1],)
+        assert beta_post.shape == (response.shape[1],)
         return _PreCalcLogLik(
             nug_sd=nug_sd,
             alpha=alpha,
