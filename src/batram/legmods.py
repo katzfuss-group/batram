@@ -737,6 +737,18 @@ class SimpleTM(torch.nn.Module):
             else:
                 ncol = min(i, m)
                 X = data[:, NN[i, :ncol]]
+                # After running this code we found the norm
+                # torch.linalg.norm(chol[i] - old_kernel) ~ 6e-7
+                # It was unclear which i this was happening for
+                old_kernel = kernel_fun(
+                    X, theta, sigmas[i], smooth, nugget_mean[i]
+                ).squeeze()
+                old_kernel = torch.linalg.cholesky(
+                    old_kernel + torch.eye(old_kernel.shape[-1]), upper=False
+                )
+                torch.save(chol[i], "../chol.pt")
+                torch.save(old_kernel, "../old_kernel.pt")
+                assert torch.isclose(chol[i, :, :], old_kernel).all(), "Not close"
                 XPred = obs[NN[i, :ncol]].unsqueeze(
                     0
                 )  # this line is different than in cond_sampl
