@@ -131,7 +131,10 @@ def test_legmods_score_with_xfix(simple_data: Data) -> None:
 
 
 def test_legmods_score_last_index(simple_data: Data) -> None:
-    tm = SimpleTM(simple_data)
+    theta_init = torch.tensor(
+        [simple_data.response[:, 0].square().mean().log(), 0.2, 0.0, 0.0, 0.0, -1.0]
+    )
+    tm = SimpleTM(simple_data, theta_init)
     last_index = 50
     obs = simple_data.response[0, :]
     with torch.no_grad():
