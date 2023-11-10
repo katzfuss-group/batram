@@ -1,0 +1,77 @@
+[build-system]
+requires = [
+    "setuptools>=65",
+]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "batram"
+description = "Bayesian Transport Maps for non-Gaussian spatial fields"
+readme = "README.md"
+license = {text = "MIT License"}
+authors = [
+    {name = "Dan Drennan", email = "danjdrennan@tamu.edu"},
+    {name = "Paul Wiemann", email = "wiemann@tamu.edu"},
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Intended Audience :: Science/Research",
+]
+requires-python = ">=3.10"
+dependencies = [
+    "torch >= 2.0",
+    "gpytorch == 1.9.1",
+    "pyro-ppl >= 1.8.4",
+    "tqdm >= 4.65",
+    "matplotlib >= 3.7",
+    "veccs @ git+https://github.com/katzfuss-group/veccs.git#egg=veccs",
+]
+
+dynamic = ["version"]
+
+[tool.setuptools.dynamic]
+version = {attr = "batram.__version__"}
+
+[project.optional-dependencies]
+dev = [
+    "black",
+    "flake8",
+    "isort",
+    "mypy>=0.991",
+    "pre-commit",
+    "pytest",
+    "pytest-cov",
+]
+
+docs = [
+    "mkdocs>=1.4.2",
+    "mkdocstrings[python]>=0.20.0",
+    "mkdocs-material>=9.1.2",
+    "mkdocs-gen-files>=0.4.0",
+    "mkdocs-literate-nav>=0.6.0",
+]
+
+appl = [
+    "xarray",
+    "h5netcdf",
+]
+
+[tool.isort]
+profile = "black"
+py_version = 310
+
+[tool.mypy]
+files = ["src", "tests"]
+ignore_missing_imports = true
+scripts_are_modules = true
+
+[tool.black]
+preview=true
+
+# turn warnings into errors
+[tool.pytest.ini_options]
+filterwarnings = [
+    "error",
+    "ignore:distutils Version classes are deprecated:DeprecationWarning",
+]
