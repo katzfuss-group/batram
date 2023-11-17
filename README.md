@@ -6,7 +6,8 @@ well as code from related research projects. We aim to provide a comprehensive
 package integrating all developments. Please refer to the project specific
 branches for now:
 
-- [Wiemann and Katzfuss (2023)](): See branch [mvtm](https://) **TODO: add link**
+- [Wiemann and Katzfuss (2023)](https://link.springer.com/article/10.1007/s13253-023-00580-z): See branch
+  [mvtm](https://github.com/katzfuss-group/batram/tree/mvtm)
 
 ## Installation
 
