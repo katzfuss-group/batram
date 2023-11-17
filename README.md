@@ -1,8 +1,13 @@
 # batram
 
-Bayesian Transport Maps for non-Gaussian spatial fields. The package contains a
-python implementation of the method described in [Katzfuss and Schäfer
-(2023)](https://doi.org/10.1080/01621459.2023.2197158).
+This repository contains a Python implementation of the method described in
+[Katzfuss and Schäfer (2023)](https://doi.org/10.1080/01621459.2023.2197158) as
+well as code from related research projects. We aim to provide a comprehensive
+package integrating all developments. Please refer to the project specific
+branches for now:
+
+- [Wiemann and Katzfuss (2023)](https://link.springer.com/article/10.1007/s13253-023-00580-z): See branch
+  [mvtm](https://github.com/katzfuss-group/batram/tree/mvtm)
 
 ## Installation
 
@@ -15,15 +20,15 @@ install the dependecy [veccs](https://github.com/katzfuss-group/veccs).
 ### Remarks
 
 - We have observed that the software seems to be unstable on a MacBook Pro with
-  M1 chip when using conda instead of a regular python installation.
+  M1 Pro chip when using conda instead of a regular python installation.
 
 
 ## How to contribute?
 
 1. install the package with the additional dependencies for development using
    `pip install -e .[dev,docs]`
-2. before pushing on `main` or a PR, run `pre-commit run --all-files` and
-   `pytest`.
+2. before pushing on `main` or a PR, run `pre-commit run --all-files` and ensure
+   that all tests pass by running `pytest`.
 3. before pushing on `main` or merging a PR, make sure the code is well
    documented and covered by tests.
 
@@ -33,12 +38,4 @@ The documentenation can be viewed while editing the code using `mkdocs serve`.
 
 An initial Python
 [implementation](https://github.com/katzfuss-group/BaTraMaSpa_py) was provided
-by Jian Cao. This work was supported by XXX [grant numbers xxxx, xxxx], YYY
-[grant number yyyy]; and ZZZZ [grant number zzzz].
-
-## Logos
-
-- ![Image from stable diffusion](https://user-images.githubusercontent.com/603509/228377927-bbdf6cde-80cf-455b-8633-b7638e1b0327.png)
-- ![Logo1](./logos/DALLE_2023-10-16_10.41.41.png)
-- ![Logo2](./logos/DALLE_2023-10-16_10.42.05.png)
-- ![Logo3](./logos/DALLE_2023-10-16_10.42.10.png)
+by [Jian Cao](https://www.uh.edu/nsm/math/people/faculty/index.php#assistantprof).

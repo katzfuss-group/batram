@@ -8,8 +8,7 @@ python implementation of the method described in [Katzfuss and Schäfer
 
 An initial Python
 [implementation](https://github.com/katzfuss-group/BaTraMaSpa_py) was provided
-by Jian Cao. This work was supported by XXX [grant numbers xxxx, xxxx], YYY
-[grant number yyyy]; and ZZZZ [grant number zzzz].
+by Jian Cao.
 
 ## documentation tools
 
