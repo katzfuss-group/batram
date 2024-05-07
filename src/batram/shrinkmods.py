@@ -128,19 +128,18 @@ class ParameterBox(torch.nn.Module):
     def forward(self) -> torch.Tensor:
         return self.theta
 
-
-class Nugget(torch.nn.Module):
-    def __init__(self, nugget_params: torch.Tensor) -> None:
+class CalcShrinkFactors(torch.nn.Module):
+    def __init__(self, kernel_factor: torch.Tensor, nugget_fector: torch.Tensor) -> None:
         super().__init__()
-        assert nugget_params.shape == (2,)
-        self.nugget_params = torch.nn.Parameter(nugget_params)
+        self.nugget_shrinkage_factor = torch.nn.Parameter(nugget_fector)
+        self.kernel_shrinkage_factor = torch.nn.Parameter(kernel_factor)
 
-    def forward(self, data: AugmentedData) -> torch.Tensor:
-        theta = self.nugget_params
-        nugget_mean = (theta[0] + theta[1] * data.scales.log()).exp()
-        nugget_mean = torch.relu(nugget_mean.sub(1e-5)).add(1e-5)
-        return nugget_mean
-
+    def forward(self) -> tuple[torch.Tensor, torch.Tensor]:
+        def transform(x: torch.Tensor) -> torch.Tensor:
+            y = x.exp().add(1)
+            y = 1 - 1 / y
+            return y
+        return transform(self.nugget_shrinkage_factor), transform(self.kernel_shrinkage_factor)
 
 # TODO: Promote to TransportMapKernel
 # This was put in to preserve the existing test suite. We can remove the old
@@ -301,8 +300,7 @@ class IntLogLik(torch.nn.Module):
 
 
     def precalc(self, kernel_result: KernelResult, response: torch.Tensor, 
-                f_mean: torch.Tensor, nug_mult: torch.Tensor, 
-                mode: str|None = None) -> _PreCalcLogLik:
+                f_mean: torch.Tensor, nug_mult: torch.Tensor) -> _PreCalcLogLik:
         nug_mean = kernel_result.nug_mean.squeeze()  # had shape (N, 1, 1)
         nug_sd = nug_mean.mul(nug_mult).squeeze()  # shape (N,)
         alpha = nug_mean.pow(2).div(nug_sd.pow(2)).add(2)  # shape (N,)
@@ -313,11 +311,6 @@ class IntLogLik(torch.nn.Module):
         assert beta.shape == (response.shape[1],)
 ######################### CHANGED BY ANIRBAN #########################################
         n = response.shape[0]
-        if mode == "posterior":
-            y_tildePosterior = torch.linalg.solve_triangular(
-                kernel_result.GChol, (response).t().unsqueeze(-1), upper=False
-            ).squeeze()  # (N, n)
-        
         y_tilde = torch.linalg.solve_triangular(
             kernel_result.GChol, (response - f_mean).t().unsqueeze(-1), upper=False
         ).squeeze()  # (N, n)
@@ -326,8 +319,7 @@ class IntLogLik(torch.nn.Module):
 
         assert alpha_post.shape == (response.shape[1],)
         assert beta_post.shape == (response.shape[1],)
-        if mode == "posterior":
-            y_tilde = y_tildePosterior
+        
         return _PreCalcLogLik(
             nug_sd=nug_sd,
             alpha=alpha,
@@ -382,7 +374,7 @@ class ShrinkTM(torch.nn.Module):
             # This is essentially \log E[y^2] over the spatial dim
             # to initialize the nugget mean.
             #log_2m = data.response[:, 0].square().mean().log()
-            theta_init = torch.tensor([0.0, 0.0, 0.0, 0.0, 0.0, -1.0])
+            theta_init = torch.tensor([2.0, 2.0, 0.0, 0.0, 0.0, -1.0])
             #alignment is (log(c_f/(1-c_f)), log(c_d/(1-c_d)), 
             #\theta_q, \theta_{\sigma,1}, \theta_{\sigma,2}, \theta_{\gamma})
             #alignment of SimpleTM: (\theta_{d,1}, \theta_{d,2}, 
@@ -427,7 +419,9 @@ class ShrinkTM(torch.nn.Module):
         
         kernel_mult = self.kernel_shrinkage_factor.exp().add(1)
         kernel_mult = 1 - 1/kernel_mult
-        kernel_result = self.kernel(aug_data, nugget_mean, kernel_mult)
+        kernel_result = self.kernel(data = aug_data, 
+                                    nug_mean = nugget_mean, 
+                                    fraction_shrink = kernel_mult)
         nug_mult = self.nugget_shrinkage_factor.exp().add(1)
         nug_mult = 1 - 1/nug_mult
         intloglik = self.intloglik(data = aug_data, 
@@ -437,179 +431,6 @@ class ShrinkTM(torch.nn.Module):
 
         loss = -aug_data.data_size / aug_data.batch_size * intloglik.sum()
         return loss
-
-    def cond_sample(
-        self,
-        x_fix=torch.tensor([]),
-        last_ind=None,
-        num_samples: int = 1,
-    ):
-        """
-        I'm not sure where this should exactly be implemented.
-
-        I guess, best ist in the likelihood nn.Module but it needs access to the
-        kernel module as well.
-
-        In any case, this class should expose an interface.
-        """
-
-        augmented_data: AugmentedData = self.augment_data(self.data, None)
-
-        data = self.data.response
-        NN = self.data.conditioning_sets
-        scales = augmented_data.scales
-        sigmas = self.kernel._sigmas(scales)
-        self.intloglik.nug_mult
-
-        nug_mean = self.shrinkage_var
-
-        #####################################################################################
-        ################### PLEASE CHANGE ASAP. THIS IS NOT CORRECT ##########################
-        nug_mult = self.nugget_shrinkage_factor.exp().add(1)
-        nug_mult = 1 - 1/nug_mult
-        kernel_result = self.kernel.forward(augmented_data, nug_mean, nug_mult)
-        nugget_mean = kernel_result.nug_mean
-        chol = kernel_result.GChol
-
-        tmp_res = self.intloglik.precalc(kernel_result, augmented_data.response, self.shrinkage_mean, 
-                                         nug_mult,mode="posterior")
-        y_tilde = tmp_res.y_tilde
-        beta_post = tmp_res.beta_post
-        alpha_post = tmp_res.alpha_post
-        n, N = data.shape
-        m = NN.shape[1]
-        if last_ind is None:
-            last_ind = N
-        # loop over variables/locations
-        x_new = torch.empty((num_samples, N))
-        x_new[:, : x_fix.size(0)] = x_fix.repeat(num_samples, 1)
-        x_new[:, x_fix.size(0) :] = 0.0
-        for i in range(x_fix.size(0), last_ind):
-            # predictive distribution for current sample
-            if i == 0:
-                cStar = torch.zeros((num_samples, n))
-                prVar = torch.zeros((num_samples,))
-            else:
-                ncol = min(i, m)
-                X = data[:, NN[i, :ncol]]
-                XPred = x_new[:, NN[i, :ncol]].unsqueeze(1)
-                cStar = self.kernel._kernel_fun(
-                    XPred, sigmas[i], nugget_mean[i], X
-                ).squeeze(1)
-                ######### CHANGED BY ANIRBAN. PLEASE DOUBLE-CHECK. IS NOT CORRECT. ############################
-                ######### PLEASE CHANGE ASAP. ############################
-                kernel_mult = self.kernel_shrinkage_factor.exp().add(1)
-                kernel_mult = 1 - 1/kernel_mult
-                prVar = self.kernel._kernel_fun(
-                    XPred, sigmas[i], nugget_mean,
-                kernel_mult).squeeze((1, 2))
-            cChol = torch.linalg.solve_triangular(
-                chol[i, :, :], cStar.unsqueeze(-1), upper=False
-            ).squeeze(-1)
-            meanPred = y_tilde[i, :].unsqueeze(0).mul(cChol).sum(1)
-            varPredNoNug = prVar - cChol.square().sum(1)
-
-            # sample
-            invGDist = InverseGamma(concentration=alpha_post[i], rate=beta_post[i])
-            nugget = invGDist.sample((num_samples,))
-            uniNDist = Normal(loc=meanPred, scale=nugget.mul(1.0 + varPredNoNug).sqrt())
-            x_new[:, i] = uniNDist.sample()
-
-        return x_new
-
-    def score(self, obs, x_fix=torch.tensor([]), last_ind=None):
-        """
-        I'm not sure where this should exactly be implemented.
-
-        I guess, best ist in the likelihood nn.Module but it needs access to the
-        kernel module as well.
-
-        In any case, this class should expose an interface.
-
-        Also, this function shares a lot of code with cond sample. that should
-        be refactored
-        """
-
-        if isinstance(last_ind, int) and last_ind < x_fix.size(-1):
-            raise ValueError("last_ind must be larger than conditioned field x_fix.")
-
-        augmented_data: AugmentedData = self.augment_data(self.data, None)
-
-        data = self.data.response
-        NN = self.data.conditioning_sets
-        # response = augmented_data.response
-        # response_neighbor_values = augmented_data.response_neighbor_values
-        theta = torch.tensor(
-            [
-                self.kernel_shrinkage_factor.detach(),
-                self.nugget_shrinkage_factor.detach(),
-                self.kernel.theta_q.detach(),
-                *self.kernel.sigma_params.detach(),
-                self.kernel.lengthscale.detach(),
-            ]
-        )
-        scales = augmented_data.scales
-        sigmas = self.kernel._sigmas(scales)
-        self.intloglik.nug_mult
-        # nugMult = self.intloglik.nugMult  # not used
-        smooth = self.kernel.smooth
-
-        nug_mean = self.shrinkage_var
-        #####################################################################################
-        ################### PLEASE CHANGE ASAP. THIS IS NOT CORRECT ##########################
-        nug_mult = self.nugget_shrinkage_factor.exp().add(1)
-        nug_mult = 1 - 1/nug_mult
-        kernel_result = self.kernel.forward(augmented_data, nug_mean, nug_mult)
-        nugget_mean = kernel_result.nug_mean
-        chol = kernel_result.GChol
-
-        #####################################################################################
-        ################### PLEASE CHANGE ASAP. THIS IS NOT CORRECT ##########################
-        tmp_res = self.intloglik.precalc(kernel_result, augmented_data.response, theta[5],
-                                         self.shrinkage_mean, mode = "posterior")
-        y_tilde = tmp_res.y_tilde
-        beta_post = tmp_res.beta_post
-        alpha_post = tmp_res.alpha_post
-        n, N = data.shape
-        m = NN.shape[1]
-        if last_ind is None:
-            last_ind = N
-        # loop over variables/locations
-        score = torch.zeros(N)
-        for i in range(x_fix.size(0), last_ind):
-            # predictive distribution for current sample
-            if i == 0:
-                cStar = torch.zeros(n)
-                prVar = torch.tensor(0.0)
-            else:
-                ncol = min(i, m)
-                X = data[:, NN[i, :ncol]]
-                XPred = obs[NN[i, :ncol]].unsqueeze(
-                    0
-                )  # this line is different than in cond_sampl
-                cStar = kernel_fun(
-                    XPred, theta, sigmas[i], smooth, nugget_mean[i], X
-                ).squeeze()
-                prVar = kernel_fun(
-                    XPred, theta, sigmas[i], smooth, nugget_mean[i]
-                ).squeeze()
-            cChol = torch.linalg.solve_triangular(
-                chol[i, :, :], cStar.unsqueeze(1), upper=False
-            ).squeeze()
-            ######### CHANGED BY ANIRBAN. PLEASE DOUBLE-CHECK. IS NOT CORRECT. ############################
-            meanPrior = torch.linalg.solve(chol) @ self.shrinkage_mean
-            meanPred = y_tilde[i, :].mul(cChol).sum() + meanPrior
-            varPredNoNug = prVar - cChol.square().sum()
-
-            # score
-            initVar = beta_post[i] / alpha_post[i] * (1 + varPredNoNug)
-            STDist = StudentT(2 * alpha_post[i])
-            score[i] = (
-                STDist.log_prob((obs[i] - meanPred) / initVar.sqrt())
-                - 0.5 * initVar.log()
-            )
-
-        return score[x_fix.size(0) :].sum()
 
     def fit(
         self,
@@ -753,6 +574,90 @@ class ShrinkTM(torch.nn.Module):
             tracked_chain=tracked_chain,
         )
 
+    def cond_sample(
+        self,
+        x_fix=torch.tensor([]),
+        last_ind=None,
+        num_samples: int = 1,
+    ):
+        """
+        I'm not sure where this should exactly be implemented.
+
+        I guess, best ist in the likelihood nn.Module but it needs access to the
+        kernel module as well.
+
+        In any case, this class should expose an interface.
+        """
+
+        augmented_data: AugmentedData = self.augment_data(self.data, None)
+
+        data = self.data.response
+        NN = self.data.conditioning_sets
+        scales = augmented_data.scales
+        sigmas = self.kernel._sigmas(scales)
+
+        nug_mean = self.shrinkage_var
+
+        #####################################################################################
+        ################### PLEASE CHANGE ASAP. THIS IS NOT CORRECT ##########################
+        nug_mult = self.nugget_shrinkage_factor.exp().add(1)
+        nug_mult = 1 - 1/nug_mult
+        kernel_mult = self.kernel_shrinkage_factor.exp().add(1)
+        kernel_mult = 1 - 1/kernel_mult
+        kernel_result = self.kernel.forward(augmented_data, nug_mean, nug_mult)
+        nugget_mean = kernel_result.nug_mean
+        chol = kernel_result.GChol
+
+        tmp_res = self.intloglik.precalc(kernel_result, augmented_data.response, self.shrinkage_mean, 
+                                         nug_mult)
+        y_tilde = tmp_res.y_tilde
+        beta_post = tmp_res.beta_post
+        alpha_post = tmp_res.alpha_post
+        n, N = data.shape
+        m = NN.shape[1]
+        if last_ind is None:
+            last_ind = N
+        # loop over variables/locations
+        x_new = torch.empty((num_samples, N))
+        x_new[:, : x_fix.size(0)] = x_fix.repeat(num_samples, 1)
+        x_new[:, x_fix.size(0) :] = 0.0
+        for i in range(x_fix.size(0), last_ind):
+            # predictive distribution for current sample
+            if i == 0:
+                cStar = torch.zeros((num_samples, n))
+                prVar = torch.zeros((num_samples,))
+            else:
+                ncol = min(i, m)
+                X = data[:, NN[i, :ncol]]
+                XPred = x_new[:, NN[i, :ncol]].unsqueeze(1)
+                cStar = self.kernel._kernel_fun(
+                    XPred, sigmas[i], nugget_mean[i], kernel_mult, X
+                ).squeeze(1)
+                ######### CHANGED BY ANIRBAN. PLEASE DOUBLE-CHECK. IS NOT CORRECT. ############################
+                ######### PLEASE CHANGE ASAP. ############################
+                ######### CHANGES MADE BY ANIRBAN ON May 6. ############################
+                #### AFFECTED VARIABLES: cStar, cChol, meanPred, varPredNoNug
+                prVar = self.kernel._kernel_fun(
+                    XPred, sigmas[i], nugget_mean[i],
+                kernel_mult).squeeze((1, 2))
+            
+            cChol = torch.linalg.solve_triangular(
+                chol[i, :, :], cStar.unsqueeze(-1), upper=False
+            ).squeeze(-1)
+            meanPred = y_tilde[i, :].unsqueeze(0).mul(cChol).sum(1)
+            varPredNoNug = prVar - cChol.square().sum(1)
+
+            if i > 0:
+                meanPred = (meanPred + 
+                            self.shrinkage_mean_factor[i, :ncol].mul(XPred.squeeze()).sum())
+
+            # sample
+            invGDist = InverseGamma(concentration=alpha_post[i], rate=beta_post[i])
+            nugget = invGDist.sample((num_samples,))
+            uniNDist = Normal(loc=meanPred, scale=nugget.mul(1.0 + varPredNoNug).sqrt())
+            x_new[:, i] = uniNDist.sample()
+
+        return x_new
 
 @dataclass
 class FitResult:
