@@ -649,7 +649,7 @@ class ShrinkTM(torch.nn.Module):
 
             if i > 0:
                 meanPred = (meanPred + 
-                            self.shrinkage_mean_factor[i, :ncol].mul(XPred.squeeze()).sum())
+                    ((XPred.squeeze(-1)) @ (self.shrinkage_mean_factor[i, :ncol].unsqueeze(1))).squeeze())
 
             # sample
             invGDist = InverseGamma(concentration=alpha_post[i], rate=beta_post[i])
