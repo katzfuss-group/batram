@@ -520,8 +520,6 @@ class ShrinkTM(torch.nn.Module):
 
         nug_mean = self.shrinkage_var
 
-        #####################################################################################
-        ################### PLEASE CHANGE ASAP. THIS IS NOT CORRECT ##########################
         nug_mult = self.nugget_shrinkage_factor.exp().add(1)
         nug_mult = 1 - 1/nug_mult
         kernel_result = self.kernel.forward(augmented_data, nug_mean)
@@ -560,7 +558,6 @@ class ShrinkTM(torch.nn.Module):
             cChol = torch.linalg.solve_triangular(
                 chol[i, :, :], cStar.unsqueeze(1), upper=False
             ).squeeze()
-            ######### CHANGED BY ANIRBAN. PLEASE DOUBLE-CHECK. IS NOT CORRECT. ############################
             
             meanPred = y_tilde[i, :].mul(cChol).sum()
             if i > 0:
@@ -579,6 +576,7 @@ class ShrinkTM(torch.nn.Module):
         return score[x_fix.size(0) :].sum()
     
 
+##FitResult is not correctly managed, but can be used for the time being.
 @dataclass
 class FitResult:
     """
