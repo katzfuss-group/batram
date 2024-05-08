@@ -16,7 +16,7 @@ from tqdm import tqdm
 
 from .base_functions import compute_scale
 from .stopper import PEarlyStopper
-from .legmods import Data, AugmentData, AugmentedData, TransportMapKernel, KernelResult, _PreCalcLogLik, FitResult
+from .legmods import Data, AugmentData, AugmentedData, TransportMapKernel, KernelResult, _PreCalcLogLik
 from .legmods import nug_fun, scaling_fun, sigma_fun, range_fun, varscale_fun, con_fun, m_threshold
 
 __doc__ = (
@@ -491,3 +491,189 @@ class ShrinkTM(torch.nn.Module):
             x_new[:, i] = uniNDist.sample()
 
         return x_new
+    
+    @torch.inference_mode()
+    def score(self, obs, x_fix=torch.tensor([]), last_ind=None):
+        """
+        I'm not sure where this should exactly be implemented.
+
+        I guess, best ist in the likelihood nn.Module but it needs access to the
+        kernel module as well.
+
+        In any case, this class should expose an interface.
+
+        Also, this function shares a lot of code with cond sample. that should
+        be refactored
+        """
+
+        if isinstance(last_ind, int) and last_ind < x_fix.size(-1):
+            raise ValueError("last_ind must be larger than conditioned field x_fix.")
+
+        augmented_data: AugmentedData = self.augment_data(self.data, None)
+
+        data = self.data.response
+        NN = self.data.conditioning_sets
+        # response = augmented_data.response
+        # response_neighbor_values = augmented_data.response_neighbor_values
+        scales = augmented_data.scales
+        sigmas = self.kernel._sigmas(scales)
+
+        nug_mean = self.shrinkage_var
+
+        #####################################################################################
+        ################### PLEASE CHANGE ASAP. THIS IS NOT CORRECT ##########################
+        nug_mult = self.nugget_shrinkage_factor.exp().add(1)
+        nug_mult = 1 - 1/nug_mult
+        kernel_result = self.kernel.forward(augmented_data, nug_mean)
+        nugget_mean = kernel_result.nug_mean
+        chol = kernel_result.GChol
+
+        tmp_res = self.intloglik.precalc(kernel_result, augmented_data.response, self.shrinkage_mean, 
+                                         nug_mult)
+        y_tilde = tmp_res.y_tilde
+        beta_post = tmp_res.beta_post
+        alpha_post = tmp_res.alpha_post
+        n, N = data.shape
+        m = NN.shape[1]
+
+        if last_ind is None:
+            last_ind = N
+        # loop over variables/locations
+        score = torch.zeros(N)
+        for i in range(x_fix.size(0), last_ind):
+            # predictive distribution for current sample
+            if i == 0:
+                cStar = torch.zeros(n)
+                prVar = torch.tensor(0.0)
+            else:
+                ncol = min(i, m)
+                X = data[:, NN[i, :ncol]]
+                XPred = obs[NN[i, :ncol]].unsqueeze(
+                    0
+                )  # this line is different than in cond_sampl
+                cStar = self.kernel._shrink_kernel_fun(
+                    XPred, sigmas[i], nugget_mean[i], X
+                ).squeeze()
+                prVar = self.kernel._shrink_kernel_fun(
+                    XPred, sigmas[i], nugget_mean[i],
+                ).squeeze()
+            cChol = torch.linalg.solve_triangular(
+                chol[i, :, :], cStar.unsqueeze(1), upper=False
+            ).squeeze()
+            ######### CHANGED BY ANIRBAN. PLEASE DOUBLE-CHECK. IS NOT CORRECT. ############################
+            
+            meanPred = y_tilde[i, :].mul(cChol).sum()
+            if i > 0:
+                meanPred = meanPred + (self.shrinkage_mean_factor[i, :ncol] * XPred.squeeze()).sum()
+
+            varPredNoNug = prVar - cChol.square().sum()
+
+            # score
+            initVar = beta_post[i] / alpha_post[i] * (1 + varPredNoNug)
+            STDist = StudentT(2 * alpha_post[i])
+            score[i] = (
+                STDist.log_prob((obs[i] - meanPred) / initVar.sqrt())
+                - 0.5 * initVar.log()
+            )
+
+        return score[x_fix.size(0) :].sum()
+    
+
+@dataclass
+class FitResult:
+    """
+    Result of a fit.
+    """
+
+    model: ShrinkTM
+    max_m: int
+    losses: np.ndarray
+    test_losses: None | np.ndarray
+    parameters: dict[str, np.ndarray]
+    param_chain: dict[str, np.ndarray]
+    tracked_chain: dict[str, np.ndarray]
+
+    def plot_loss(
+        self,
+        ax: None | plt.Axes = None,
+        use_inset: bool = True,
+        **kwargs,
+    ) -> plt.Axes:
+        """
+        Plot the loss curve.
+        """
+        if ax is None:
+            _, ax = plt.subplots(1, 1)
+
+        (p1,) = ax.plot(self.losses, "C0", label="Train Loss", **kwargs)
+        legend_handle = [p1]
+
+        if self.test_losses is not None:
+            twin = cast(MPLAxes, ax.twinx())
+            (p2,) = twin.plot(self.test_losses, "C1", label="Test Loss", **kwargs)
+            legend_handle.append(p2)
+            twin.set_ylabel("Test Loss")
+
+        if use_inset:
+            end_idx = len(self.losses)
+            start_idx = int(0.8 * end_idx)
+            inset_iterations = np.arange(start_idx, end_idx)
+
+            inset = ax.inset_axes((0.5, 0.5, 0.45, 0.45))
+            inset.plot(inset_iterations, self.losses[start_idx:], "C0", **kwargs)
+
+            if self.test_losses is not None:
+                insert_twim = cast(MPLAxes, inset.twinx())
+                insert_twim.plot(
+                    inset_iterations, self.test_losses[start_idx:], "C1", **kwargs
+                )
+
+        ax.set_xlabel("Iteration")
+        ax.set_ylabel("Train Loss")
+        ax.legend(handles=legend_handle, loc="lower right", bbox_to_anchor=(0.925, 0.2))
+
+        return ax
+
+    def plot_params(self, ax: plt.Axes | None = None, **kwargs) -> plt.Axes:
+        if ax is None:
+            fig, ax = plt.subplots(1, 1)
+
+        ax.plot(
+            self.param_chain["nugget.nugget_params"],
+            label=[f"nugget {i}" for i in range(2)],
+            **kwargs,
+        )
+        ax.plot(
+            self.param_chain["kernel.theta_q"],
+            label="neighbors scale",
+            **kwargs,
+        )
+        ax.plot(
+            self.param_chain["kernel.sigma_params"],
+            label=[f"sigma {i}" for i in range(2)],
+            **kwargs,
+        )
+        ax.plot(
+            self.param_chain["kernel.lengthscale"],
+            label="lengthscale",
+            **kwargs,
+        )
+        ax.set_xlabel("Epoch")
+        ax.set_ylabel("Raw Parameter Value")
+        ax.legend()
+
+        return ax
+
+    def plot_neighbors(self, ax: plt.Axes | None = None, **kwargs) -> plt.Axes:
+        if ax is None:
+            _, ax = plt.subplots(1, 1)
+
+        m = self.tracked_chain["kernel.m"]
+        epochs = np.arange(m.size, **kwargs)
+        ax.step(epochs, m)
+        ax.set_title("Nearest neighbors through optimization")
+        ax.set_xlabel("Epoch")
+        ax.set_ylabel("Number of nearest neighbors (m)")
+        ax.set_ylim(0, self.max_m)
+
+        return ax
