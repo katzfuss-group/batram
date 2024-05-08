@@ -16,7 +16,8 @@ from tqdm import tqdm
 
 from .base_functions import compute_scale
 from .stopper import PEarlyStopper
-from .legmods import Data, AugmentData, AugmentedData
+from .legmods import Data, AugmentData, AugmentedData, TransportMapKernel, KernelResult, _PreCalcLogLik, FitResult
+from .legmods import nug_fun, scaling_fun, sigma_fun, range_fun, varscale_fun, con_fun, m_threshold
 
 __doc__ = (
 
@@ -28,56 +29,8 @@ from the parametric kernels.
 """
 )
 
-def nug_fun(i, theta, scales):
-    """Scales nugget (d) at location i."""
-    return torch.exp(torch.log(scales[i]).mul(theta[1]).add(theta[0]))
 
-
-def scaling_fun(k, theta):
-    """Scales distance to kth nearest neighbors."""
-    theta_pos = torch.exp(theta[2])
-    return torch.sqrt(torch.exp(-k * theta_pos))
-
-
-def sigma_fun(i, theta, scales):
-    """Scales nonlinearities (sigma) at location i."""
-    return torch.exp(torch.log(scales[i]).mul(theta[4]).add(theta[3]))
-
-
-def range_fun(theta):
-    """Sets lengthscale of nonlinear kernel transformation."""
-    return torch.exp(theta[5])
-
-
-def varscale_fun(i, theta, scales):
-    return torch.exp(torch.log(scales[i]).mul(theta[7]).add(theta[6]))
-
-
-def con_fun(i, theta, scales):
-    return torch.exp(torch.log(scales[i]).mul(theta[9]).add(theta[8]))
-
-
-def m_threshold(theta, m_max) -> torch.Tensor:
-    """Determines a threshold for m nearest neighbors."""
-    rng = torch.arange(m_max + 1) + 1
-    mask = scaling_fun(rng, theta) >= 0.01
-    m = mask.sum()
-
-    if m <= 0:
-        raise RuntimeError(
-            f"Size of conditioning set is less than or equal to zero; m = {m.item()}."
-        )
-    if m > m_max:
-        logging.warning(
-            f"Required size of the conditioning sets m = {m.item()} is greater than "
-            f"the maximum number of neighbors {m_max = } in the pre-calculated "
-            "conditioning sets."
-        )
-        m = torch.tensor(m_max)
-    return m
-
-############################ HAS BEEN CHANGED FROM BASE FUNCTION ##############################
-def kernel_fun(X1, theta, sigma, smooth, nuggetMean=None, X2=None):
+def shrink_kernel_fun(X1, theta, sigma, smooth, nuggetMean=None, X2=None):
     N = X1.shape[-1]  # size of the conditioning set
 
     if X2 is None:
@@ -109,24 +62,6 @@ def compute_shrinkage_means(data: Data, mean_factor: torch.Tensor) -> torch.Tens
     previous_ordered_responses = previous_ordered_responses.permute(1, 0, 2)
     mean_values = (torch.bmm(previous_ordered_responses, mean_factor)).squeeze().mT
     return mean_values
-    
-
-@dataclass
-class KernelResult:
-    G: torch.Tensor
-    GChol: torch.Tensor
-    nug_mean: torch.Tensor
-
-
-# TODO: Deprecate / remove
-# The nugget and kernel refactors make this obsolete.
-class ParameterBox(torch.nn.Module):
-    def __init__(self, theta) -> None:
-        super().__init__()
-        self.theta = torch.nn.Parameter(theta)
-
-    def forward(self) -> torch.Tensor:
-        return self.theta
 
 class CalcShrinkFactors(torch.nn.Module):
     def __init__(self, kernel_factor: torch.Tensor, nugget_fector: torch.Tensor) -> None:
@@ -141,114 +76,34 @@ class CalcShrinkFactors(torch.nn.Module):
             return y
         return transform(self.nugget_shrinkage_factor), transform(self.kernel_shrinkage_factor)
 
-# TODO: Promote to TransportMapKernel
-# This was put in to preserve the existing test suite. We can remove the old
-# test suite once we are satisfied with this implementation. This integration
-# does not eliminate the need for the helper functions at the start of the file
-# but it is a step in that direction. (The helpers are still used in the
-# `cond_samp` and `score` methods of `SimpleTM`.) This rewrite allows us to
-# more easily extend the covariates case and simplifies how parameters are
-# managed throughout the model.
-class TransportMapKernel(torch.nn.Module):
-    """A temporary class to refactor the `TransportMapKernel`.
+class ShrinkTransportMapKernel(TransportMapKernel):
+    def __init__(self, theta: torch.Tensor, smooth: float = 1.5) -> None:
+        super().__init__(theta, smooth)
 
-    Once the refactor is complete, replace the `TransportMapKernel` with this
-    class. To complete the refactor, we will need to modify the `SimpleTM`
-    constructor slightly.
-    """
-
-    def __init__(
-        self,
-        kernel_params: torch.Tensor,
-        smooth: float = 1.5,
-        fix_m: int | None = None,
-    ) -> None:
-        super().__init__()
-
-        assert kernel_params.numel() == 4
-        self.theta_q = torch.nn.Parameter(kernel_params[0])
-        self.sigma_params = torch.nn.Parameter(kernel_params[1:3])
-        self.lengthscale = torch.nn.Parameter(kernel_params[-1])
-        #we consider that fraction shrink is in log(c_f/(1-c_f) 
-        #format so range is (-inf, inf).
-
-        self.fix_m = fix_m
-        self.smooth = smooth
-        self._tracked_values: dict["str", torch.Tensor] = {}
-
-        matern = MaternKernel(smooth)
-        matern._set_lengthscale(torch.tensor(1.0))
-        matern.requires_grad_(False)
-        self._kernel = matern
-
-    def _sigmas(self, scales: torch.Tensor) -> torch.Tensor:
-        """Computes nonlinear scales for the kernel."""
-        params = self.sigma_params
-        return torch.exp(params[0] + params[1] * scales.log())
-
-    def _scale(self, k: torch.Tensor) -> torch.Tensor:
-        """Computes scales of nearest neighbors in the kernel."""
-        theta_pos = torch.exp(self.theta_q)
-        return torch.exp(-0.5 * k * theta_pos)
-
-    def _range(self) -> torch.Tensor:
-        """Computes the lengthscale of the kernel."""
-        return self.lengthscale.exp()
-
-    def _m_threshold(self, max_m: int) -> torch.Tensor:
-        """Computes the size of the conditioning sets."""
-        rng = torch.arange(max_m) + 1
-        mask = self._scale(rng) >= 0.01
-        m = mask.sum()
-
-        if m <= 0:
-            raise RuntimeError(
-                f"Size of conditioning set not positive; m = {m.item()}."
-            )
-        if m > max_m:
-            logging.warning(
-                f"Required size of the conditioning sets m = {m.item()} is "
-                f"greater than the maximum number of neighbors {max_m = } in "
-                "the pre-calculated conditioning sets."
-            )
-            m = torch.tensor(max_m)
-        return m
-
-    def _determine_m(self, max_m: int) -> torch.Tensor:
-        m: torch.Tensor
-        if self.fix_m is None:
-            m = self._m_threshold(max_m)
-        else:
-            m = torch.tensor(self.fix_m)
-
-        return m
-    
-    ########################### HAS BEEN CHANGED FROM BASE FUNCTION (ANIRBAN) ###########################
-    def _kernel_fun(
+    def _shrink_kernel_fun(
         self,
         x1: torch.Tensor,
         sigmas: torch.Tensor,
         nug_mean: torch.Tensor,
-        fraction_shrink: torch.Tensor,
         x2: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        """Computes the transport map kernel."""
+        """Computes the transport map kernel.
+        This version is valid for the shrinkage kernel.
+        It is different from the kernel function in the base class.
+        It does not include the linear part.
+        """
         k = torch.arange(x1.shape[-1]) + 1
         scaling = self._scale(k)
 
         _x1 = x1 * scaling
         _x2 = _x1 if x2 is None else x2 * scaling
-        #linear = _x1 @ _x2.mT
 
         ls = self._range() * math.sqrt(2 * self.smooth)
         nonlinear = self._kernel(_x1 / ls, _x2 / ls).to_dense()
-        out = (#linear + 
-            sigmas**2 * nonlinear) / nug_mean
-        
-        return fraction_shrink * out
-
-    def forward(self, data: AugmentedData, nug_mean: torch.Tensor, 
-                fraction_shrink: torch.Tensor) -> KernelResult:
+        out = (sigmas**2 * nonlinear) / nug_mean
+        return out
+    
+    def forward(self, data: AugmentedData, nug_mean: torch.Tensor) -> KernelResult:
         """Computes with internalized kernel params instead of ParameterBox."""
         max_m = data.max_m
         m = self._determine_m(max_m)
@@ -265,7 +120,7 @@ class TransportMapKernel(torch.nn.Module):
 
         nug_mean_reshaped = nug_mean.reshape(-1, 1, 1)
         sigmas = self._sigmas(data.scales).reshape(-1, 1, 1)
-        k = self._kernel_fun(x, sigmas, nug_mean_reshaped, fraction_shrink)
+        k = self._shrink_kernel_fun(x, sigmas, nug_mean_reshaped)
         eyes = torch.eye(k.shape[-1]).expand_as(k)
         g = k + eyes
 
@@ -284,16 +139,6 @@ class TransportMapKernel(torch.nn.Module):
         # matrices or simply the kernel. This requires further thought still.
         return KernelResult(g, g_chol, nug_mean)
 
-
-class _PreCalcLogLik(NamedTuple):
-    nug_sd: torch.Tensor
-    alpha: torch.Tensor
-    beta: torch.Tensor
-    alpha_post: torch.Tensor
-    beta_post: torch.Tensor
-    y_tilde: torch.Tensor
-
-
 class IntLogLik(torch.nn.Module):
     def __init__(self) -> None:
         super().__init__()
@@ -309,7 +154,6 @@ class IntLogLik(torch.nn.Module):
         assert nug_sd.shape == (response.shape[1],)
         assert alpha.shape == (response.shape[1],)
         assert beta.shape == (response.shape[1],)
-######################### CHANGED BY ANIRBAN #########################################
         n = response.shape[0]
         y_tilde = torch.linalg.solve_triangular(
             kernel_result.GChol, (response - f_mean).t().unsqueeze(-1), upper=False
@@ -374,8 +218,8 @@ class ShrinkTM(torch.nn.Module):
             # This is essentially \log E[y^2] over the spatial dim
             # to initialize the nugget mean.
             #log_2m = data.response[:, 0].square().mean().log()
-            theta_init = torch.tensor([2.0, 2.0, 0.0, 0.0, 0.0, -1.0])
-            #alignment is (log(c_f/(1-c_f)), log(c_d/(1-c_d)), 
+            theta_init = torch.tensor([2.0, 0.0, 0.0, 0.0, -1.0])
+            #alignment is (log(c_d/(1-c_d)), 
             #\theta_q, \theta_{\sigma,1}, \theta_{\sigma,2}, \theta_{\gamma})
             #alignment of SimpleTM: (\theta_{d,1}, \theta_{d,2}, 
             #\theta_q, \theta_{\sigma,1}, \theta_{\sigma,2}, \theta_{\gamma})
@@ -384,9 +228,8 @@ class ShrinkTM(torch.nn.Module):
         self.shrinkage_mean = compute_shrinkage_means(data, shrinkage_mean_factor)
         self.shrinkage_var = shrinkage_var
         #self.nugget = Nugget(theta_init[:2])
-        self.nugget_shrinkage_factor = torch.nn.Parameter(theta_init[1])
-        self.kernel_shrinkage_factor = torch.nn.Parameter(theta_init[0])
-        self.kernel = TransportMapKernel(theta_init[2:], smooth=smooth)
+        self.nugget_shrinkage_factor = torch.nn.Parameter(theta_init[0])
+        self.kernel = ShrinkTransportMapKernel(theta_init[1:], smooth=smooth)
         self.intloglik = IntLogLik()
         self.data = data
         self.shrinkage_mean_factor = shrinkage_mean_factor
@@ -417,11 +260,8 @@ class ShrinkTM(torch.nn.Module):
             kernel_mean = self.shrinkage_mean[: ,batch_idx]
         aug_data: AugmentedData = self.augment_data(data, batch_idx)
         
-        kernel_mult = self.kernel_shrinkage_factor.exp().add(1)
-        kernel_mult = 1 - 1/kernel_mult
         kernel_result = self.kernel(data = aug_data, 
-                                    nug_mean = nugget_mean, 
-                                    fraction_shrink = kernel_mult)
+                                    nug_mean = nugget_mean)
         nug_mult = self.nugget_shrinkage_factor.exp().add(1)
         nug_mult = 1 - 1/nug_mult
         intloglik = self.intloglik(data = aug_data, 
@@ -598,13 +438,10 @@ class ShrinkTM(torch.nn.Module):
 
         nug_mean = self.shrinkage_var
 
-        #####################################################################################
-        ################### PLEASE CHANGE ASAP. THIS IS NOT CORRECT ##########################
+        
         nug_mult = self.nugget_shrinkage_factor.exp().add(1)
         nug_mult = 1 - 1/nug_mult
-        kernel_mult = self.kernel_shrinkage_factor.exp().add(1)
-        kernel_mult = 1 - 1/kernel_mult
-        kernel_result = self.kernel.forward(augmented_data, nug_mean, nug_mult)
+        kernel_result = self.kernel.forward(augmented_data, nug_mean)
         nugget_mean = kernel_result.nug_mean
         chol = kernel_result.GChol
 
@@ -630,16 +467,12 @@ class ShrinkTM(torch.nn.Module):
                 ncol = min(i, m)
                 X = data[:, NN[i, :ncol]]
                 XPred = x_new[:, NN[i, :ncol]].unsqueeze(1)
-                cStar = self.kernel._kernel_fun(
-                    XPred, sigmas[i], nugget_mean[i], kernel_mult, X
+                cStar = self.kernel._shrink_kernel_fun(
+                    XPred, sigmas[i], nugget_mean[i], X
                 ).squeeze(1)
-                ######### CHANGED BY ANIRBAN. PLEASE DOUBLE-CHECK. IS NOT CORRECT. ############################
-                ######### PLEASE CHANGE ASAP. ############################
-                ######### CHANGES MADE BY ANIRBAN ON May 6. ############################
-                #### AFFECTED VARIABLES: cStar, cChol, meanPred, varPredNoNug
-                prVar = self.kernel._kernel_fun(
-                    XPred, sigmas[i], nugget_mean[i],
-                kernel_mult).squeeze((1, 2))
+                
+                prVar = self.kernel._shrink_kernel_fun(
+                    XPred, sigmas[i], nugget_mean[i]).squeeze((1, 2))
             
             cChol = torch.linalg.solve_triangular(
                 chol[i, :, :], cStar.unsqueeze(-1), upper=False
@@ -658,102 +491,3 @@ class ShrinkTM(torch.nn.Module):
             x_new[:, i] = uniNDist.sample()
 
         return x_new
-
-@dataclass
-class FitResult:
-    """
-    Result of a fit.
-    """
-
-    model: ShrinkTM
-    max_m: int
-    losses: np.ndarray
-    test_losses: None | np.ndarray
-    parameters: dict[str, np.ndarray]
-    param_chain: dict[str, np.ndarray]
-    tracked_chain: dict[str, np.ndarray]
-
-    def plot_loss(
-        self,
-        ax: None | plt.Axes = None,
-        use_inset: bool = True,
-        **kwargs,
-    ) -> plt.Axes:
-        """
-        Plot the loss curve.
-        """
-        if ax is None:
-            _, ax = plt.subplots(1, 1)
-
-        (p1,) = ax.plot(self.losses, "C0", label="Train Loss", **kwargs)
-        legend_handle = [p1]
-
-        if self.test_losses is not None:
-            twin = cast(MPLAxes, ax.twinx())
-            (p2,) = twin.plot(self.test_losses, "C1", label="Test Loss", **kwargs)
-            legend_handle.append(p2)
-            twin.set_ylabel("Test Loss")
-
-        if use_inset:
-            end_idx = len(self.losses)
-            start_idx = int(0.8 * end_idx)
-            inset_iterations = np.arange(start_idx, end_idx)
-
-            inset = ax.inset_axes((0.5, 0.5, 0.45, 0.45))
-            inset.plot(inset_iterations, self.losses[start_idx:], "C0", **kwargs)
-
-            if self.test_losses is not None:
-                insert_twim = cast(MPLAxes, inset.twinx())
-                insert_twim.plot(
-                    inset_iterations, self.test_losses[start_idx:], "C1", **kwargs
-                )
-
-        ax.set_xlabel("Iteration")
-        ax.set_ylabel("Train Loss")
-        ax.legend(handles=legend_handle, loc="lower right", bbox_to_anchor=(0.925, 0.2))
-
-        return ax
-
-    def plot_params(self, ax: plt.Axes | None = None, **kwargs) -> plt.Axes:
-        if ax is None:
-            fig, ax = plt.subplots(1, 1)
-
-        ax.plot(
-            self.param_chain["nugget.nugget_params"],
-            label=[f"nugget {i}" for i in range(2)],
-            **kwargs,
-        )
-        ax.plot(
-            self.param_chain["kernel.theta_q"],
-            label="neighbors scale",
-            **kwargs,
-        )
-        ax.plot(
-            self.param_chain["kernel.sigma_params"],
-            label=[f"sigma {i}" for i in range(2)],
-            **kwargs,
-        )
-        ax.plot(
-            self.param_chain["kernel.lengthscale"],
-            label="lengthscale",
-            **kwargs,
-        )
-        ax.set_xlabel("Epoch")
-        ax.set_ylabel("Raw Parameter Value")
-        ax.legend()
-
-        return ax
-
-    def plot_neighbors(self, ax: plt.Axes | None = None, **kwargs) -> plt.Axes:
-        if ax is None:
-            _, ax = plt.subplots(1, 1)
-
-        m = self.tracked_chain["kernel.m"]
-        epochs = np.arange(m.size, **kwargs)
-        ax.step(epochs, m)
-        ax.set_title("Nearest neighbors through optimization")
-        ax.set_xlabel("Epoch")
-        ax.set_ylabel("Number of nearest neighbors (m)")
-        ax.set_ylim(0, self.max_m)
-
-        return ax
