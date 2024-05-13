@@ -6,7 +6,7 @@ from typing import NamedTuple, cast
 
 import numpy as np
 import torch
-from gpytorch.kernels import MaternKernel
+from gpytorch.kernels import Kernel, MaternKernel, RBFKernel
 from sklearn.gaussian_process import kernels as gpkernel
 from matplotlib import pyplot as plt
 from matplotlib.axes import Axes as MPLAxes
@@ -573,22 +573,24 @@ class ShrinkTM(torch.nn.Module):
     
 
 class ParametricKernel(torch.nn.Module):
-    def __init__(self, parkernel: gpkernel.Matern, 
-                 log_ls : float | None,
-                 log_nu: float,
+    def __init__(self, parkernel: Kernel, 
+                 #log_ls : float | None,
                  data: Data,
                  **kwargs) -> None:
         super().__init__()
         self.kernel = parkernel
-        self.kernel.set_params(nu=math.exp(log_nu))
-        self.log_ls = torch.nn.Parameter(torch.as_tensor(log_ls).view(1,))
+        #self.kernel.set_params(nu=math.exp(log_nu))
+        #if log_ls is not None:
+        #    self.log_ls = torch.nn.Parameter(torch.as_tensor(log_ls).view(1,))
+        #else:
+        self.log_ls = torch.nn.Parameter(torch.tensor([0.0]))
         param_nugget = kwargs.get("param_nugget", 1e-2)
         self.param_nugget = param_nugget
         self.data = data
         self._tracked_values: dict["str", torch.Tensor] = {}
 
     def _determine_m(self, weights: torch.Tensor) -> int:
-        mask = weights >= 1e-4
+        mask = (weights >= 1e-4)
         return int(mask.sum())
     
     def _calculate_weights(self, batch_idx: torch.Tensor) -> tuple[torch.Tensor,torch.Tensor, int]:
@@ -600,23 +602,23 @@ class ParametricKernel(torch.nn.Module):
         largest_conditioning_set = nn.shape[1]        
         
         parametric_mean_factors = torch.zeros((batch_idx.shape[0], largest_conditioning_set))
-        parametric_variances = torch.zeros(batch_idx.shape[0])
-        if batch_idx.shape[0] == self.data.locs.shape[0]:
-            parametric_variances[0] = 1
+        parametric_variances = torch.ones(batch_idx.shape[0])
     
         for i, pointer in enumerate(batch_idx):
-            current_locs = self.data.locs[pointer, :]
-            if pointer < largest_conditioning_set:
-                previous_locs = self.data.locs[nn[pointer, 0:pointer], :]
-            else:
-                previous_locs = self.data.locs[nn[pointer], :]
-            Sigma22 = (torch.from_numpy(self.kernel(previous_locs)) + 
-                            (self.param_nugget ** 2) * torch.eye(previous_locs.shape[0]))
-            Sigma12 = torch.from_numpy(self.kernel(current_locs, previous_locs))
-            Sigma22inv = torch.linalg.solve(Sigma22, torch.eye(previous_locs.shape[0], dtype=torch.double))
-            
-            tmp = Sigma12 @ Sigma22inv
-            parametric_mean_factors[i, 0:min(pointer.item(), largest_conditioning_set)] = tmp
+            if pointer > 0:
+                current_locs = self.data.locs[pointer, :].unsqueeze(0)
+                #the above line is written to handle gpytorch implementation
+                if pointer < largest_conditioning_set:
+                    previous_locs = self.data.locs[nn[pointer, 0:pointer], :]
+                else:
+                    previous_locs = self.data.locs[nn[pointer], :]
+                Sigma22 = (self.kernel(previous_locs, previous_locs) + 
+                                (self.param_nugget ** 2) * torch.eye(previous_locs.shape[0]))
+                Sigma12 = self.kernel(current_locs, previous_locs)
+                Sigma22inv = torch.linalg.solve(Sigma22, torch.eye(previous_locs.shape[0]))
+                
+                tmp = Sigma12 @ Sigma22inv
+                parametric_mean_factors[i, 0:min(pointer.item(), largest_conditioning_set)] = tmp
             
         num_Uvalues_stripped = torch.zeros(largest_conditioning_set, dtype=torch.int64)
         for i in range(largest_conditioning_set):
@@ -630,8 +632,11 @@ class ParametricKernel(torch.nn.Module):
         return parametric_mean_factors, parametric_variances, m
         
 
-    def forward(self, batch_idx: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        self.kernel.set_params(leng_scale = self.log_ls.exp())
+    def forward(self, batch_idx: torch.Tensor | None) -> tuple[torch.Tensor, torch.Tensor]:
+        assert isinstance(self.log_ls, torch.Tensor)
+        self.kernel._set_lengthscale(self.log_ls.exp())
+        if batch_idx is None:
+            batch_idx = torch.arange(self.data.locs.shape[0])
         mean_factors, variances, m = self._calculate_weights(batch_idx)
         self._tracked_values["param_m"] = torch.Tensor(m)
         return mean_factors, variances
@@ -646,8 +651,8 @@ class EstimableShrinkTM(torch.nn.Module):
         theta_init: None | torch.Tensor = None,
         linear: bool = False,
         transportmap_smooth: float = 1.5,
-        log_param_nu: None | float = None,
-        log_param_ls: None | float = None
+        param_nu: None | float = None,
+        #log_param_ls: None | float = None
     ) -> None:
         super().__init__()
 
@@ -667,19 +672,20 @@ class EstimableShrinkTM(torch.nn.Module):
         self.augment_data = AugmentData()
         
         if parametric_kernel == "matern":
-            self.parametric_kernel = ParametricKernel(parkernel = gpkernel.Matern(), 
-                                                      log_ls = log_param_ls,
-                                                      log_nu = log_param_nu,
+            if param_nu is None:
+                param_nu = 1.5
+            else:
+                assert param_nu in (0.5, 1.5, 2.5)
+            self.parametric_kernel = ParametricKernel(parkernel = MaternKernel(nu=param_nu), 
+                                                      #log_ls = log_param_ls,
                                                       data=data)
         elif parametric_kernel == "sqexponential":
-            self.parametric_kernel = ParametricKernel(parkernel = gpkernel.Matern(),
-                                                      log_ls = log_param_ls,
-                                                      log_nu = math.log(math.inf),
+            self.parametric_kernel = ParametricKernel(parkernel = RBFKernel(),
+                                                      #log_ls = log_param_ls,
                                                       data=data)
         elif parametric_kernel == "exponential":
-            self.parametric_kernel = ParametricKernel(parkernel = gpkernel.Matern(),
-                                                      log_ls = log_param_ls,
-                                                      log_nu = math.log(0.5),
+            self.parametric_kernel = ParametricKernel(parkernel = MaternKernel(nu=0.5),
+                                                      #log_ls = log_param_ls,
                                                       data=data)
         
         self.transform_shrinkage_factor = transform_shrink_factor
