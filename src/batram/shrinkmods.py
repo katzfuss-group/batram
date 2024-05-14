@@ -584,17 +584,16 @@ class ShrinkTM(torch.nn.Module):
     
 
 class ParametricKernel(torch.nn.Module):
-    def __init__(self, parkernel: MaternKernel, 
+    def __init__(self, parkernel: CustomMaternKernel, 
                  #log_ls : float | None,
                  data: Data,
                  **kwargs) -> None:
         super().__init__()
         self.kernel = parkernel
-        #self.kernel.set_params(nu=math.exp(log_nu))
-        #if log_ls is not None:
-        #    self.log_ls = torch.nn.Parameter(torch.as_tensor(log_ls).view(1,))
-        #else:
-        self.log_ls = torch.nn.Parameter(torch.tensor([1.0]))
+        #self.kernel.requires_grad_(True)
+        ls = kwargs.get("ls", 1.0)
+        self.log_ls = torch.nn.Parameter(torch.tensor([ls]).log())
+        #self.kernel._set_lengthscale(ls)
         param_nugget = kwargs.get("param_nugget", 1e-6)
         self.param_nugget = param_nugget
         self.data = data
@@ -615,6 +614,7 @@ class ParametricKernel(torch.nn.Module):
         parametric_mean_factors = torch.zeros((batch_idx.shape[0], largest_conditioning_set))
         parametric_variances = torch.ones(batch_idx.shape[0])
 
+        ls = self.log_ls.exp()
         for i, pointer in enumerate(batch_idx):
             if pointer > 0:
                 current_locs = self.data.locs[pointer, :].unsqueeze(0)
@@ -623,13 +623,14 @@ class ParametricKernel(torch.nn.Module):
                     previous_locs = self.data.locs[nn[pointer, 0:pointer], :]
                 else:
                     previous_locs = self.data.locs[nn[pointer], :]
-                Sigma22 = (self.kernel(previous_locs, previous_locs).to_dense() + 
+                Sigma22 = (self.kernel(ls, previous_locs, previous_locs).to_dense() + 
                                 (self.param_nugget ** 2) * torch.eye(previous_locs.shape[0]))
-                Sigma12 = self.kernel(current_locs, previous_locs).to_dense()
+                Sigma12 = self.kernel(ls, current_locs, previous_locs).to_dense()
                 Sigma22inv = torch.linalg.solve(Sigma22, torch.eye(previous_locs.shape[0]))
                 
                 tmp = Sigma12 @ Sigma22inv
                 parametric_mean_factors[i, 0:min(pointer.item(), largest_conditioning_set)] = tmp
+                parametric_variances[i] = 1 - tmp @ Sigma12.T
             
         num_Uvalues_stripped = torch.zeros(largest_conditioning_set, dtype=torch.int64)
         for i in range(largest_conditioning_set):
@@ -645,7 +646,7 @@ class ParametricKernel(torch.nn.Module):
 
     def forward(self, batch_idx: torch.Tensor | None) -> tuple[torch.Tensor, torch.Tensor]:
         assert isinstance(self.log_ls, torch.Tensor)
-        self.kernel._set_lengthscale(self.log_ls.exp())
+        #self.kernel._set_lengthscale(self.log_ls.exp())
         if batch_idx is None:
             batch_idx = torch.arange(self.data.locs.shape[0])
         mean_factors, variances, m = self._calculate_weights(batch_idx)
@@ -663,8 +664,8 @@ class EstimableShrinkTM(torch.nn.Module):
         linear: bool = False,
         transportmap_smooth: float = 1.5,
         param_nu: None | float = None,
-        positive_nugget_bound: bool = True,
-        #log_param_ls: None | float = None
+        nug_mult_bounded: bool = True,
+        param_ls: None | float = 1.0
     ) -> None:
         super().__init__()
 
@@ -688,28 +689,32 @@ class EstimableShrinkTM(torch.nn.Module):
                 param_nu = 1.5
             else:
                 assert param_nu in (0.5, 1.5, 2.5)
-            self.parametric_kernel = ParametricKernel(parkernel = MaternKernel(nu=param_nu), 
-                                                      #log_ls = log_param_ls,
+            self.parametric_kernel = ParametricKernel(parkernel = CustomMaternKernel(fix_nu=param_nu), 
+                                                      ls = param_ls,
                                                       data=data)
         elif parametric_kernel == "sqexponential":
-            self.parametric_kernel = ParametricKernel(parkernel = MaternKernel(nu=torch.inf),
-                                                      #log_ls = log_param_ls,
+            self.parametric_kernel = ParametricKernel(parkernel = CustomMaternKernel(fix_nu=torch.inf),
+                                                      ls = param_ls,
                                                       data=data)
         elif parametric_kernel == "exponential":
-            self.parametric_kernel = ParametricKernel(parkernel = MaternKernel(nu=0.5),
-                                                      #log_ls = log_param_ls,
+            self.parametric_kernel = ParametricKernel(parkernel = CustomMaternKernel(fix_nu=0.5),
+                                                      ls = param_ls,
                                                       data=data)
         
-        if positive_nugget_bound:
-            self.transform_shrinkage_factor = transform_bound_shrink_factor
-        else:
-            self.transform_shrinkage_factor = transform_positive_shrink_factor
         self.nugget_shrinkage_factor = torch.nn.Parameter(theta_init[0])
         self.kernel = ShrinkTransportMapKernel(theta_init[1:], smooth=transportmap_smooth)
         self.intloglik = IntLogLik()
         self.data = data
+        self.nug_mult_bounded = nug_mult_bounded
         self._tracked_values: dict[str, torch.Tensor] = {}
 
+    def transform_shrinkage_factor(self) -> torch.Tensor:
+        if self.nug_mult_bounded:
+            y = 1 - self.nugget_shrinkage_factor.exp().add(1).reciprocal()
+        else:
+            y = self.nugget_shrinkage_factor.exp()
+        return y
+    
     def forward(
         self, batch_idx: None | torch.Tensor = None, data: None | Data = None
     ) -> torch.Tensor:
@@ -728,7 +733,7 @@ class EstimableShrinkTM(torch.nn.Module):
         
         kernel_result = self.kernel(data = aug_data, 
                                     nug_mean = nugget_mean)
-        nug_mult = self.transform_shrinkage_factor(self.nugget_shrinkage_factor)
+        nug_mult = self.transform_shrinkage_factor()
         intloglik = self.intloglik(data = aug_data, 
                                    kernel_result = kernel_result, 
                                    nug_mult = nug_mult, 
@@ -917,8 +922,7 @@ class EstimableShrinkTM(torch.nn.Module):
         shrinkage_mean_factor, nug_mean,_ = self.parametric_kernel._calculate_weights(torch.arange(self.data.locs.shape[0]))
 
         shrinkage_mean = compute_shrinkage_means(self.data, shrinkage_mean_factor)
-        nug_mult = self.nugget_shrinkage_factor.exp().add(1)
-        nug_mult = 1 - 1/nug_mult
+        nug_mult = self.transform_shrinkage_factor()
         kernel_result = self.kernel.forward(augmented_data, nug_mean)
         nugget_mean = kernel_result.nug_mean
         chol = kernel_result.GChol
@@ -1000,8 +1004,7 @@ class EstimableShrinkTM(torch.nn.Module):
 
         shrinkage_mean = compute_shrinkage_means(self.data, shrinkage_mean_factor)
 
-        nug_mult = self.nugget_shrinkage_factor.exp().add(1)
-        nug_mult = 1 - 1/nug_mult
+        nug_mult = self.transform_shrinkage_factor()
         kernel_result = self.kernel.forward(augmented_data, nug_mean)
         nugget_mean = kernel_result.nug_mean
         chol = kernel_result.GChol
