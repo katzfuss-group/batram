@@ -19,6 +19,7 @@ from .base_functions import compute_scale
 from .stopper import PEarlyStopper
 from .legmods import Data, AugmentData, AugmentedData, TransportMapKernel, KernelResult, _PreCalcLogLik
 from .legmods import nug_fun, scaling_fun, sigma_fun, range_fun, varscale_fun, con_fun, m_threshold
+from .helpers import CustomMaternKernel
 
 __doc__ = (
 
@@ -68,8 +69,12 @@ def compute_shrinkage_means(data: Data | AugmentedData, mean_factor: torch.Tenso
     mean_values = (torch.bmm(previous_ordered_responses, mean_factor)).squeeze().mT
     return mean_values
 
-def transform_shrink_factor(x: torch.Tensor) -> torch.Tensor:
+def transform_bound_shrink_factor(x: torch.Tensor) -> torch.Tensor:
     y = 1 - x.exp().add(1).reciprocal()
+    return y
+
+def transform_positive_shrink_factor(x: torch.Tensor) -> torch.Tensor:
+    y = x.exp()
     return y
 
 class ShrinkTransportMapKernel(TransportMapKernel):
@@ -204,6 +209,7 @@ class ShrinkTM(torch.nn.Module):
         linear: bool = False,
         smooth: float = 1.5,
         #nug_mult: float = 4.0,
+        positive_nugget_bound: bool = True,
     ) -> None:
         super().__init__()
 
@@ -229,7 +235,10 @@ class ShrinkTM(torch.nn.Module):
         self.intloglik = IntLogLik()
         self.data = data
         self.shrinkage_mean_factor = shrinkage_mean_factor
-        self.transform_shrinkage_factor = transform_shrink_factor
+        if positive_nugget_bound:
+            self.transform_shrinkage_factor = transform_bound_shrink_factor
+        else:
+            self.transform_shrinkage_factor = transform_positive_shrink_factor
         self._tracked_values: dict[str, torch.Tensor] = {}
 
     def named_tracked_values(
@@ -435,8 +444,7 @@ class ShrinkTM(torch.nn.Module):
         nug_mean = self.shrinkage_var
 
         
-        nug_mult = self.nugget_shrinkage_factor.exp().add(1)
-        nug_mult = 1 - 1/nug_mult
+        nug_mult = self.transform_shrinkage_factor(self.nugget_shrinkage_factor)
         kernel_result = self.kernel.forward(augmented_data, nug_mean)
         nugget_mean = kernel_result.nug_mean
         chol = kernel_result.GChol
@@ -516,8 +524,7 @@ class ShrinkTM(torch.nn.Module):
 
         nug_mean = self.shrinkage_var
 
-        nug_mult = self.nugget_shrinkage_factor.exp().add(1)
-        nug_mult = 1 - 1/nug_mult
+        nug_mult = self.transform_shrinkage_factor(self.nugget_shrinkage_factor)
         kernel_result = self.kernel.forward(augmented_data, nug_mean)
         nugget_mean = kernel_result.nug_mean
         chol = kernel_result.GChol
@@ -573,7 +580,7 @@ class ShrinkTM(torch.nn.Module):
     
 
 class ParametricKernel(torch.nn.Module):
-    def __init__(self, parkernel: Kernel, 
+    def __init__(self, parkernel: MaternKernel, 
                  #log_ls : float | None,
                  data: Data,
                  **kwargs) -> None:
@@ -583,8 +590,8 @@ class ParametricKernel(torch.nn.Module):
         #if log_ls is not None:
         #    self.log_ls = torch.nn.Parameter(torch.as_tensor(log_ls).view(1,))
         #else:
-        self.log_ls = torch.nn.Parameter(torch.tensor([0.0]))
-        param_nugget = kwargs.get("param_nugget", 1e-2)
+        self.log_ls = torch.nn.Parameter(torch.tensor([1.0]))
+        param_nugget = kwargs.get("param_nugget", 1e-6)
         self.param_nugget = param_nugget
         self.data = data
         self._tracked_values: dict["str", torch.Tensor] = {}
@@ -603,7 +610,7 @@ class ParametricKernel(torch.nn.Module):
         
         parametric_mean_factors = torch.zeros((batch_idx.shape[0], largest_conditioning_set))
         parametric_variances = torch.ones(batch_idx.shape[0])
-    
+
         for i, pointer in enumerate(batch_idx):
             if pointer > 0:
                 current_locs = self.data.locs[pointer, :].unsqueeze(0)
@@ -612,9 +619,9 @@ class ParametricKernel(torch.nn.Module):
                     previous_locs = self.data.locs[nn[pointer, 0:pointer], :]
                 else:
                     previous_locs = self.data.locs[nn[pointer], :]
-                Sigma22 = (self.kernel(previous_locs, previous_locs) + 
+                Sigma22 = (self.kernel(previous_locs, previous_locs).to_dense() + 
                                 (self.param_nugget ** 2) * torch.eye(previous_locs.shape[0]))
-                Sigma12 = self.kernel(current_locs, previous_locs)
+                Sigma12 = self.kernel(current_locs, previous_locs).to_dense()
                 Sigma22inv = torch.linalg.solve(Sigma22, torch.eye(previous_locs.shape[0]))
                 
                 tmp = Sigma12 @ Sigma22inv
@@ -652,6 +659,7 @@ class EstimableShrinkTM(torch.nn.Module):
         linear: bool = False,
         transportmap_smooth: float = 1.5,
         param_nu: None | float = None,
+        positive_nugget_bound: bool = True,
         #log_param_ls: None | float = None
     ) -> None:
         super().__init__()
@@ -680,7 +688,7 @@ class EstimableShrinkTM(torch.nn.Module):
                                                       #log_ls = log_param_ls,
                                                       data=data)
         elif parametric_kernel == "sqexponential":
-            self.parametric_kernel = ParametricKernel(parkernel = RBFKernel(),
+            self.parametric_kernel = ParametricKernel(parkernel = MaternKernel(nu=torch.inf),
                                                       #log_ls = log_param_ls,
                                                       data=data)
         elif parametric_kernel == "exponential":
@@ -688,7 +696,10 @@ class EstimableShrinkTM(torch.nn.Module):
                                                       #log_ls = log_param_ls,
                                                       data=data)
         
-        self.transform_shrinkage_factor = transform_shrink_factor
+        if positive_nugget_bound:
+            self.transform_shrinkage_factor = transform_bound_shrink_factor
+        else:
+            self.transform_shrinkage_factor = transform_positive_shrink_factor
         self.nugget_shrinkage_factor = torch.nn.Parameter(theta_init[0])
         self.kernel = ShrinkTransportMapKernel(theta_init[1:], smooth=transportmap_smooth)
         self.intloglik = IntLogLik()
