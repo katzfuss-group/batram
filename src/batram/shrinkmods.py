@@ -209,7 +209,7 @@ class ShrinkTM(torch.nn.Module):
         linear: bool = False,
         smooth: float = 1.5,
         #nug_mult: float = 4.0,
-        positive_nugget_bound: bool = True,
+        nug_mult_bound: bool = True,
     ) -> None:
         super().__init__()
 
@@ -235,10 +235,7 @@ class ShrinkTM(torch.nn.Module):
         self.intloglik = IntLogLik()
         self.data = data
         self.shrinkage_mean_factor = shrinkage_mean_factor
-        if positive_nugget_bound:
-            self.transform_shrinkage_factor = transform_bound_shrink_factor
-        else:
-            self.transform_shrinkage_factor = transform_positive_shrink_factor
+        self.nug_mult_bounded = nug_mult_bound
         self._tracked_values: dict[str, torch.Tensor] = {}
 
     def named_tracked_values(
@@ -253,6 +250,13 @@ class ShrinkTM(torch.nn.Module):
         )
         yield from gen
 
+    def transform_shrinkage_factor(self) -> torch.Tensor:
+        if self.nug_mult_bounded:
+            y = 1 - self.nugget_shrinkage_factor.exp().add(1).reciprocal()
+        else:
+            y = self.nugget_shrinkage_factor.exp()
+        return y
+    
     def forward(
         self, batch_idx: None | torch.Tensor = None, data: None | Data = None
     ) -> torch.Tensor:
@@ -268,7 +272,7 @@ class ShrinkTM(torch.nn.Module):
         
         kernel_result = self.kernel(data = aug_data, 
                                     nug_mean = nugget_mean)
-        nug_mult = self.transform_shrinkage_factor(self.nugget_shrinkage_factor)
+        nug_mult = self.transform_shrinkage_factor()
         intloglik = self.intloglik(data = aug_data, 
                                    kernel_result = kernel_result, 
                                    nug_mult = nug_mult, 
@@ -444,7 +448,7 @@ class ShrinkTM(torch.nn.Module):
         nug_mean = self.shrinkage_var
 
         
-        nug_mult = self.transform_shrinkage_factor(self.nugget_shrinkage_factor)
+        nug_mult = self.transform_shrinkage_factor()
         kernel_result = self.kernel.forward(augmented_data, nug_mean)
         nugget_mean = kernel_result.nug_mean
         chol = kernel_result.GChol
@@ -524,7 +528,7 @@ class ShrinkTM(torch.nn.Module):
 
         nug_mean = self.shrinkage_var
 
-        nug_mult = self.transform_shrinkage_factor(self.nugget_shrinkage_factor)
+        nug_mult = self.transform_shrinkage_factor()
         kernel_result = self.kernel.forward(augmented_data, nug_mean)
         nugget_mean = kernel_result.nug_mean
         chol = kernel_result.GChol
