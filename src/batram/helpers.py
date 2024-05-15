@@ -1,10 +1,13 @@
 from scipy import linalg, stats
 from scipy.spatial.distance import cdist, pdist, squareform
 from scipy.special import gamma, kv
-from sklearn.gaussian_process import kernels
+from sklearn.gaussian_process import kernels as gpkernel
 import numpy as np
 import torch
+from math import sqrt
 
+from gpytorch import add_jitter, kernels
+from linear_operator import to_linear_operator
 
 def make_grid(nlocs: int, ndims: int) -> np.ndarray:
     """
@@ -19,7 +22,7 @@ class GaussianProcessGenerator:
     Numpy-based Gausssian Process data generator.
     """
 
-    def __init__(self, locs: np.ndarray, kernel: kernels.Kernel, sd_noise: float):
+    def __init__(self, locs: np.ndarray, kernel: gpkernel.Kernel, sd_noise: float):
         self.locs = locs
         self.kernel = kernel
         self.sd_noise = sd_noise
@@ -57,7 +60,6 @@ class GaussianProcessGenerator:
         return np.dot(chol, z.T).T
     
 
-###################### NOT IN USE YET (ANIRBAN, MAY 10, 2024) ###################################
 class CustomMaternKernel(torch.nn.Module):
     """Initializes a Matern Kernel."""
     def __init__(self, **kwargs):
@@ -89,3 +91,67 @@ class CustomMaternKernel(torch.nn.Module):
         return K
         
 
+class BaseKernel(kernels.Kernel):
+    """A flexible Matern or RBF (Gaussian) kernel parameterized by `nu`.
+
+    This kernel contains no torch parameters, so it is easy to build on top of
+    to compose parameterizations on top of.
+    """
+
+    def __init__(self, nu: float | str, eps: float = 0.0):
+        """Initialize the kernel with smoothness and pre-defined jitter.
+
+        Args:
+        -----
+        nu: float | "inf"
+            The smoothness parameter of the Matern kernel. Must be one of
+            {0.5, 1.5, 2.5, "inf"}. When "inf" is passed, the kernel is defined
+            as an RBF (Gaussian) kernel.
+
+        eps: float
+            The jitter to add to the diagonal of the kernel matrix. This is not
+            always used, but can be used to stabilize computations in some cases.
+        """
+        super().__init__()
+
+        if nu not in (0.5, 1.5, 2.5, "inf"):
+            raise ValueError(f"nu must be one of {{0.5, 1.5, 2.5, 'inf'}}, got {nu}")
+
+        self.nu = nu
+        self.eps = eps
+
+    def forward(  # type: ignore
+        self,
+        x1: torch.Tensor,
+        x2: torch.Tensor | None,
+        **params,
+    ):
+        x2 = x1 if x2 is None else x2
+        mean = x1.mean(-2, keepdim=True)
+        x1_ = x1 - mean
+        x2_ = x2 - mean
+
+        match self.nu:
+            case 0.5:
+                dist = self.covar_dist(x1_, x2_, square_dist=False, **params)
+                s = 1.0
+                exp = torch.exp(-dist)
+            case 1.5:
+                dist = self.covar_dist(x1_, x2_, square_dist=False, **params)
+                s = 1.0 + sqrt(3) * dist
+                exp = torch.exp(-sqrt(3) * dist)
+            case 2.5:
+                dist = self.covar_dist(x1_, x2_, square_dist=False, **params)
+                s = 1.0 + sqrt(5) * dist + 5 / 3 * dist**2
+                exp = torch.exp(-sqrt(5) * dist)
+            case _:
+                dist2 = self.covar_dist(x1_, x2_, square_dist=True, **params)
+                s = 1.0
+                exp = torch.exp(-0.5 * dist2)
+
+        kernel = s * exp
+
+        if torch.equal(x1, x2):
+            return add_jitter(kernel, self.eps)
+        else:
+            return to_linear_operator(kernel)
