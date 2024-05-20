@@ -17,19 +17,31 @@ from tqdm import tqdm
 
 from .base_functions import compute_scale
 from .stopper import PEarlyStopper
-from .legmods import Data, AugmentData, AugmentedData, TransportMapKernel, KernelResult, _PreCalcLogLik
-from .legmods import nug_fun, scaling_fun, sigma_fun, range_fun, varscale_fun, con_fun, m_threshold
+from .legmods import (
+    Data,
+    AugmentData,
+    AugmentedData,
+    TransportMapKernel,
+    KernelResult,
+    _PreCalcLogLik,
+)
+from .legmods import (
+    nug_fun,
+    scaling_fun,
+    sigma_fun,
+    range_fun,
+    varscale_fun,
+    con_fun,
+    m_threshold,
+)
 from .helpers import CustomMaternKernel, BaseKernel
 
-__doc__ = (
-
-"""
+__doc__ = """
 This module contains the implementation of the transport map kernel where
 the mean and variance of the individual regressions are centered around
 the given mean and variances. This mean and variances are values derived
 from the parametric kernels.
 """
-)
 
 
 def shrink_kernel_fun(X1, theta, sigma, smooth, nuggetMean=None, X2=None):
@@ -41,41 +53,44 @@ def shrink_kernel_fun(X1, theta, sigma, smooth, nuggetMean=None, X2=None):
         nuggetMean = 1
     X1s = X1.mul(scaling_fun(torch.arange(1, N + 1).unsqueeze(0), theta))
     X2s = X2.mul(scaling_fun(torch.arange(1, N + 1).unsqueeze(0), theta))
-    #lin = X1s @ X2s.mT
+    # lin = X1s @ X2s.mT
     MaternObj = MaternKernel(smooth)
     MaternObj._set_lengthscale(torch.tensor(1.0))
     MaternObj.requires_grad_(False)
     lenScal = range_fun(theta) * math.sqrt(2 * smooth)
     nonlin = MaternObj.forward(X1s.div(lenScal), X2s.div(lenScal))
     nonlin = sigma.pow(2).reshape(-1, 1, 1) * nonlin
-    return (#lin + 
-        nonlin).div(nuggetMean)
+    return (nonlin).div(nuggetMean)  # lin +
 
 
-
-def compute_shrinkage_means(data: Data | AugmentedData, mean_factor: torch.Tensor) -> torch.Tensor:
+def compute_shrinkage_means(
+    data: Data | AugmentedData, mean_factor: torch.Tensor
+) -> torch.Tensor:
     """Computes the means of the individual regressions."""
     # make sure the dimensions match properly
     # the modifications for AugmentedData enables the function to
     # being used in minibatching scheme.
-    
+
     previous_ordered_responses = data.augmented_response[..., 1:]
     assert mean_factor.shape[1] == previous_ordered_responses.shape[2]
     assert mean_factor.shape[0] == previous_ordered_responses.shape[1]
     previous_ordered_responses = previous_ordered_responses.nan_to_num()
     mean_factor = mean_factor.unsqueeze(-1)
     previous_ordered_responses = previous_ordered_responses.permute(1, 0, 2)
-    
+
     mean_values = (torch.bmm(previous_ordered_responses, mean_factor)).squeeze().mT
     return mean_values
+
 
 def transform_bound_shrink_factor(x: torch.Tensor) -> torch.Tensor:
     y = 1 - x.exp().add(1).reciprocal()
     return y
 
+
 def transform_positive_shrink_factor(x: torch.Tensor) -> torch.Tensor:
     y = x.exp()
     return y
+
 
 class ShrinkTransportMapKernel(TransportMapKernel):
     def __init__(self, theta: torch.Tensor, smooth: float = 1.5) -> None:
@@ -103,7 +118,7 @@ class ShrinkTransportMapKernel(TransportMapKernel):
         nonlinear = self._kernel(_x1 / ls, _x2 / ls).to_dense()
         out = (sigmas**2 * nonlinear) / nug_mean
         return out
-    
+
     def forward(self, data: AugmentedData, nug_mean: torch.Tensor) -> KernelResult:
         """Computes with internalized kernel params instead of ParameterBox."""
         max_m = data.max_m
@@ -140,13 +155,18 @@ class ShrinkTransportMapKernel(TransportMapKernel):
         # matrices or simply the kernel. This requires further thought still.
         return KernelResult(g, g_chol, nug_mean)
 
+
 class IntLogLik(torch.nn.Module):
     def __init__(self) -> None:
         super().__init__()
 
-
-    def precalc(self, kernel_result: KernelResult, response: torch.Tensor, 
-                f_mean: torch.Tensor, nug_mult: torch.Tensor) -> _PreCalcLogLik:
+    def precalc(
+        self,
+        kernel_result: KernelResult,
+        response: torch.Tensor,
+        f_mean: torch.Tensor,
+        nug_mult: torch.Tensor,
+    ) -> _PreCalcLogLik:
         nug_mean = kernel_result.nug_mean.squeeze()  # had shape (N, 1, 1)
         nug_sd = nug_mean.mul(nug_mult).squeeze()  # shape (N,)
         alpha = nug_mean.pow(2).div(nug_sd.pow(2)).add(2)  # shape (N,)
@@ -164,7 +184,7 @@ class IntLogLik(torch.nn.Module):
 
         assert alpha_post.shape == (response.shape[1],)
         assert beta_post.shape == (response.shape[1],)
-        
+
         return _PreCalcLogLik(
             nug_sd=nug_sd,
             alpha=alpha,
@@ -174,11 +194,19 @@ class IntLogLik(torch.nn.Module):
             y_tilde=y_tilde,
         )
 
-    def forward(self, data: AugmentedData, kernel_result: KernelResult, 
-                nug_mult: torch.Tensor, f_mean: torch.Tensor) -> torch.Tensor:
-        tmp_res = self.precalc(kernel_result = kernel_result, 
-                               response = data.augmented_response[:, :, 0], 
-                               nug_mult = nug_mult, f_mean = f_mean)
+    def forward(
+        self,
+        data: AugmentedData,
+        kernel_result: KernelResult,
+        nug_mult: torch.Tensor,
+        f_mean: torch.Tensor,
+    ) -> torch.Tensor:
+        tmp_res = self.precalc(
+            kernel_result=kernel_result,
+            response=data.augmented_response[:, :, 0],
+            nug_mult=nug_mult,
+            f_mean=f_mean,
+        )
 
         # integrated likelihood
         logdet = kernel_result.GChol.diagonal(dim1=-1, dim2=-2).log().sum(dim=1)  # (N,)
@@ -208,7 +236,7 @@ class ShrinkTM(torch.nn.Module):
         theta_init: None | torch.Tensor = None,
         linear: bool = False,
         smooth: float = 1.5,
-        #nug_mult: float = 4.0,
+        # nug_mult: float = 4.0,
         nug_mult_bound: bool = True,
     ) -> None:
         super().__init__()
@@ -219,17 +247,17 @@ class ShrinkTM(torch.nn.Module):
         if theta_init is None:
             # This is essentially \log E[y^2] over the spatial dim
             # to initialize the nugget mean.
-            #log_2m = data.response[:, 0].square().mean().log()
+            # log_2m = data.response[:, 0].square().mean().log()
             theta_init = torch.tensor([2.0, 0.0, 0.0, 0.0, -1.0])
-            #alignment is (log(c_d/(1-c_d)), 
-            #\theta_q, \theta_{\sigma,1}, \theta_{\sigma,2}, \theta_{\gamma})
-            #alignment of SimpleTM: (\theta_{d,1}, \theta_{d,2}, 
-            #\theta_q, \theta_{\sigma,1}, \theta_{\sigma,2}, \theta_{\gamma})
+            # alignment is (log(c_d/(1-c_d)),
+            # \theta_q, \theta_{\sigma,1}, \theta_{\sigma,2}, \theta_{\gamma})
+            # alignment of SimpleTM: (\theta_{d,1}, \theta_{d,2},
+            # \theta_q, \theta_{\sigma,1}, \theta_{\sigma,2}, \theta_{\gamma})
 
         self.augment_data = AugmentData()
         self.shrinkage_mean = compute_shrinkage_means(data, shrinkage_mean_factor)
         self.shrinkage_var = shrinkage_var
-        #self.nugget = Nugget(theta_init[:2])
+        # self.nugget = Nugget(theta_init[:2])
         self.nugget_shrinkage_factor = torch.nn.Parameter(theta_init[0])
         self.kernel = ShrinkTransportMapKernel(theta_init[1:], smooth=smooth)
         self.intloglik = IntLogLik()
@@ -256,27 +284,28 @@ class ShrinkTM(torch.nn.Module):
         else:
             y = self.nugget_shrinkage_factor.exp()
         return y
-    
+
     def forward(
         self, batch_idx: None | torch.Tensor = None, data: None | Data = None
     ) -> torch.Tensor:
         if data is None:
             data = self.data
-        if batch_idx is None:   
+        if batch_idx is None:
             nugget_mean = self.shrinkage_var
             kernel_mean = self.shrinkage_mean
         else:
             nugget_mean = self.shrinkage_var[batch_idx]
-            kernel_mean = self.shrinkage_mean[: ,batch_idx]
+            kernel_mean = self.shrinkage_mean[:, batch_idx]
         aug_data: AugmentedData = self.augment_data(data, batch_idx)
-        
-        kernel_result = self.kernel(data = aug_data, 
-                                    nug_mean = nugget_mean)
+
+        kernel_result = self.kernel(data=aug_data, nug_mean=nugget_mean)
         nug_mult = self.transform_shrinkage_factor()
-        intloglik = self.intloglik(data = aug_data, 
-                                   kernel_result = kernel_result, 
-                                   nug_mult = nug_mult, 
-                                   f_mean = kernel_mean)
+        intloglik = self.intloglik(
+            data=aug_data,
+            kernel_result=kernel_result,
+            nug_mult=nug_mult,
+            f_mean=kernel_mean,
+        )
 
         loss = -aug_data.data_size / aug_data.batch_size * intloglik.sum()
         return loss
@@ -447,14 +476,14 @@ class ShrinkTM(torch.nn.Module):
 
         nug_mean = self.shrinkage_var
 
-        
         nug_mult = self.transform_shrinkage_factor()
         kernel_result = self.kernel.forward(augmented_data, nug_mean)
         nugget_mean = kernel_result.nug_mean
         chol = kernel_result.GChol
 
-        tmp_res = self.intloglik.precalc(kernel_result, augmented_data.response, self.shrinkage_mean, 
-                                         nug_mult)
+        tmp_res = self.intloglik.precalc(
+            kernel_result, augmented_data.response, self.shrinkage_mean, nug_mult
+        )
         y_tilde = tmp_res.y_tilde
         beta_post = tmp_res.beta_post
         alpha_post = tmp_res.alpha_post
@@ -478,10 +507,11 @@ class ShrinkTM(torch.nn.Module):
                 cStar = self.kernel._shrink_kernel_fun(
                     XPred, sigmas[i], nugget_mean[i], X
                 ).squeeze(1)
-                
+
                 prVar = self.kernel._shrink_kernel_fun(
-                    XPred, sigmas[i], nugget_mean[i]).squeeze((1, 2))
-            
+                    XPred, sigmas[i], nugget_mean[i]
+                ).squeeze((1, 2))
+
             cChol = torch.linalg.solve_triangular(
                 chol[i, :, :], cStar.unsqueeze(-1), upper=False
             ).squeeze(-1)
@@ -489,8 +519,13 @@ class ShrinkTM(torch.nn.Module):
             varPredNoNug = prVar - cChol.square().sum(1)
 
             if i > 0:
-                meanPred = (meanPred + 
-                    ((XPred.squeeze(-1)) @ (self.shrinkage_mean_factor[i, :ncol].unsqueeze(1))).squeeze())
+                meanPred = (
+                    meanPred
+                    + (
+                        (XPred.squeeze(-1))
+                        @ (self.shrinkage_mean_factor[i, :ncol].unsqueeze(1))
+                    ).squeeze()
+                )
 
             # sample
             invGDist = InverseGamma(concentration=alpha_post[i], rate=beta_post[i])
@@ -499,7 +534,7 @@ class ShrinkTM(torch.nn.Module):
             x_new[:, i] = uniNDist.sample()
 
         return x_new
-    
+
     @torch.inference_mode()
     def score(self, obs, x_fix=torch.tensor([]), last_ind=None):
         """
@@ -533,8 +568,9 @@ class ShrinkTM(torch.nn.Module):
         nugget_mean = kernel_result.nug_mean
         chol = kernel_result.GChol
 
-        tmp_res = self.intloglik.precalc(kernel_result, augmented_data.response, self.shrinkage_mean, 
-                                         nug_mult)
+        tmp_res = self.intloglik.precalc(
+            kernel_result, augmented_data.response, self.shrinkage_mean, nug_mult
+        )
         y_tilde = tmp_res.y_tilde
         beta_post = tmp_res.beta_post
         alpha_post = tmp_res.alpha_post
@@ -560,15 +596,20 @@ class ShrinkTM(torch.nn.Module):
                     XPred, sigmas[i], nugget_mean[i], X
                 ).squeeze()
                 prVar = self.kernel._shrink_kernel_fun(
-                    XPred, sigmas[i], nugget_mean[i],
+                    XPred,
+                    sigmas[i],
+                    nugget_mean[i],
                 ).squeeze()
             cChol = torch.linalg.solve_triangular(
                 chol[i, :, :], cStar.unsqueeze(1), upper=False
             ).squeeze()
-            
+
             meanPred = y_tilde[i, :].mul(cChol).sum()
             if i > 0:
-                meanPred = meanPred + (self.shrinkage_mean_factor[i, :ncol] * XPred.squeeze()).sum()
+                meanPred = (
+                    meanPred
+                    + (self.shrinkage_mean_factor[i, :ncol] * XPred.squeeze()).sum()
+                )
 
             varPredNoNug = prVar - cChol.square().sum()
 
@@ -581,149 +622,78 @@ class ShrinkTM(torch.nn.Module):
             )
 
         return score[x_fix.size(0) :].sum()
-    
 
 class ParametricKernel(torch.nn.Module):
-    def __init__(self, parkernel: CustomMaternKernel, 
-                 #log_ls : float | None,
-                 data: Data,
-                 **kwargs) -> None:
+    def __init__(
+        self,
+        parkernel: BaseKernel,
+        # log_ls : float | None,
+        data: Data,
+        **kwargs,
+    ) -> None:
         super().__init__()
         self.kernel = parkernel
-        #self.kernel.requires_grad_(True)
         ls = kwargs.get("ls", 1.0)
         self.log_ls = torch.nn.Parameter(torch.tensor([ls]).log())
-        #self.kernel._set_lengthscale(ls)
         param_nugget = kwargs.get("param_nugget", 1e-6)
         self.param_nugget = param_nugget
         self.data = data
         self._tracked_values: dict["str", torch.Tensor] = {}
 
     def _determine_m(self, weights: torch.Tensor) -> int:
-        mask = (weights >= 1e-4)
+        mask = weights >= 1e-4
         return int(mask.sum())
-    
-    def _calculate_weights(self, batch_idx: torch.Tensor) -> tuple[torch.Tensor,torch.Tensor, int]:
+
+    def _calculate_weights(
+        self, batch_idx: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Calculate the weights for the parametric kernel.
         """
 
-        nn = self.data.conditioning_sets
-        largest_conditioning_set = nn.shape[1]        
-        
-        parametric_mean_factors = torch.zeros((batch_idx.shape[0], largest_conditioning_set))
+        nn = self.data.conditioning_sets[batch_idx, :]
+        largest_conditioning_set = nn.shape[1]
+
+        indicators_nn = torch.from_numpy(np.where(nn == -1, 0, 1))
+        covariance_indicators = torch.bmm(indicators_nn.unsqueeze(-1), 
+                                          indicators_nn.unsqueeze(1))
+
+        parametric_mean_factors = torch.zeros(
+            (batch_idx.shape[0], largest_conditioning_set)
+        )
         parametric_variances = torch.ones(batch_idx.shape[0])
 
         ls = self.log_ls.exp()
-        for i, pointer in enumerate(batch_idx):
-            if pointer > 0:
-                current_locs = self.data.locs[pointer, :].unsqueeze(0)
-                #the above line is written to handle gpytorch implementation
-                if pointer < largest_conditioning_set:
-                    previous_locs = self.data.locs[nn[pointer, 0:pointer], :]
-                else:
-                    previous_locs = self.data.locs[nn[pointer], :]
-                Sigma22 = (self.kernel(ls, previous_locs, previous_locs).to_dense() + 
-                                (self.param_nugget ** 2) * torch.eye(previous_locs.shape[0]))
-                Sigma12 = self.kernel(ls, current_locs, previous_locs).to_dense()
-                Sigma22inv = torch.linalg.solve(Sigma22, 
-                                                torch.eye(previous_locs.shape[0], dtype=Sigma22.dtype))
-                
-                tmp = Sigma12 @ Sigma22inv
-                parametric_mean_factors[i, 0:min(pointer.item(), largest_conditioning_set)] = tmp
-                parametric_variances[i] = 1 - tmp @ Sigma12.T
-            
-        num_Uvalues_stripped = torch.zeros(largest_conditioning_set, dtype=torch.int64)
-        for i in range(largest_conditioning_set):
-            num_Uvalues_stripped[i] = sum((batch_idx > i))
-        avg_weights = ((parametric_mean_factors ** 2).sum(0))/(num_Uvalues_stripped)
-        m = self._determine_m(avg_weights)
+        previous_locs = self.data.locs[nn, :]/ls
+        current_locs = (self.data.locs[batch_idx,:]).unsqueeze(1) / ls
+        previous_covars_batch = ((self.kernel(previous_locs, previous_locs)).to_dense()
+                                                                * covariance_indicators)
+        current_covars_batch = ((self.kernel(current_locs, previous_locs)).to_dense().squeeze() * 
+                                indicators_nn)
+        mask = (torch.eye(previous_covars_batch.shape[-1]).
+                    repeat(previous_covars_batch.shape[0], 1, 1).bool())
+        previous_covars_batch[mask] = 1.0
 
-        if m < largest_conditioning_set:
-            parametric_mean_factors[:, m:(largest_conditioning_set + 1)] = 0.0
+        ## working with cholsky_inverse instead of direct inverse
+        prev_covars_batchchol = torch.linalg.cholesky(previous_covars_batch)
+        prev_covars_batchinv = (torch.cholesky_inverse(prev_covars_batchchol)).to_dense()
 
-        return parametric_mean_factors, parametric_variances, m
+        parametric_mean_factors = (current_covars_batch.unsqueeze(1) @ prev_covars_batchinv).squeeze()
+        parametric_variances = 1 - ((parametric_mean_factors.unsqueeze(1) @ 
+                                     current_covars_batch.unsqueeze(-1))).squeeze()
 
-    def forward(self, batch_idx: torch.Tensor | None) -> tuple[torch.Tensor, torch.Tensor]:
+
+        return parametric_mean_factors, parametric_variances
+
+    def forward(
+        self, batch_idx: torch.Tensor | None
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         assert isinstance(self.log_ls, torch.Tensor)
-        #self.kernel._set_lengthscale(self.log_ls.exp())
+        # self.kernel._set_lengthscale(self.log_ls.exp())
         if batch_idx is None:
             batch_idx = torch.arange(self.data.locs.shape[0])
-        mean_factors, variances, m = self._calculate_weights(batch_idx)
-        #self._tracked_values["param_m"] = torch.Tensor(m)
-        return mean_factors, variances    
-
-class ParametricKernelRefactor(torch.nn.Module):
-    def __init__(self, parkernel: BaseKernel, 
-                 #log_ls : float | None,
-                 data: Data,
-                 **kwargs) -> None:
-        super().__init__()
-        self.kernel = parkernel
-        #self.kernel.requires_grad_(True)
-        ls = kwargs.get("ls", 1.0)
-        self.log_ls = torch.nn.Parameter(torch.tensor([ls]).log())
-        #self.kernel._set_lengthscale(ls)
-        param_nugget = kwargs.get("param_nugget", 1e-6)
-        self.param_nugget = param_nugget
-        self.data = data
-        self._tracked_values: dict["str", torch.Tensor] = {}
-
-    def _determine_m(self, weights: torch.Tensor) -> int:
-        mask = (weights >= 1e-4)
-        return int(mask.sum())
-    
-    def _calculate_weights(self, batch_idx: torch.Tensor) -> tuple[torch.Tensor,torch.Tensor, int]:
-        """
-        Calculate the weights for the parametric kernel.
-        """
-
-        nn = self.data.conditioning_sets
-        largest_conditioning_set = nn.shape[1]        
-        
-        parametric_mean_factors = torch.zeros((batch_idx.shape[0], largest_conditioning_set))
-        parametric_variances = torch.ones(batch_idx.shape[0])
-
-        ls = self.log_ls.exp()
-        for i, pointer in enumerate(batch_idx):
-            if pointer > 0:
-                current_locs = (self.data.locs[pointer, :]/ls).unsqueeze(0)
-                #the above line is written to handle gpytorch implementation
-                if pointer < largest_conditioning_set:
-                    previous_locs = self.data.locs[nn[pointer, 0:pointer], :].to_dense()
-                else:
-                    previous_locs = self.data.locs[nn[pointer], :]
-                Sigma22 = (self.kernel(previous_locs, previous_locs).to_dense()) #+ 
-                                #(self.param_nugget ** 2) * torch.eye(previous_locs.shape[0]))
-                Sigma12 = (self.kernel(current_locs, previous_locs).to_dense())
-                Sigma22inv = torch.linalg.solve(Sigma22, 
-                                                torch.eye(previous_locs.shape[0], dtype = Sigma22.dtype))
-                
-                tmp = Sigma12 @ Sigma22inv
-                parametric_mean_factors[i, 0:min(pointer.item(), largest_conditioning_set)] = tmp
-                parametric_variances[i] = 1 - tmp @ Sigma12.T
-            
-        num_Uvalues_stripped = torch.zeros(largest_conditioning_set, dtype=torch.int64)
-        for i in range(largest_conditioning_set):
-            num_Uvalues_stripped[i] = sum((batch_idx > i))
-        avg_weights = ((parametric_mean_factors ** 2).sum(0))/(num_Uvalues_stripped)
-        m = self._determine_m(avg_weights)
-
-        if m < largest_conditioning_set:
-            parametric_mean_factors[:, m:(largest_conditioning_set + 1)] = 0.0
-
-        return parametric_mean_factors, parametric_variances, m
-
-    def forward(self, batch_idx: torch.Tensor | None) -> tuple[torch.Tensor, torch.Tensor]:
-        assert isinstance(self.log_ls, torch.Tensor)
-        #self.kernel._set_lengthscale(self.log_ls.exp())
-        if batch_idx is None:
-            batch_idx = torch.arange(self.data.locs.shape[0])
-        mean_factors, variances, m = self._calculate_weights(batch_idx)
-        self._tracked_values["param_m"] = torch.Tensor(m)
+        mean_factors, variances = self._calculate_weights(batch_idx)
         return mean_factors, variances
-
-        
 
 class EstimableShrinkTM(torch.nn.Module):
     def __init__(
@@ -735,412 +705,8 @@ class EstimableShrinkTM(torch.nn.Module):
         transportmap_smooth: float = 1.5,
         param_nu: None | float = None,
         nug_mult_bounded: bool = True,
-        param_ls: None | float = 1.0
-    ) -> None:
-        super().__init__()
-
-        if linear:
-            raise ValueError("Linear TM not implemented yet.")
-
-        if theta_init is None:
-            # This is essentially \log E[y^2] over the spatial dim
-            # to initialize the nugget mean.
-            #log_2m = data.response[:, 0].square().mean().log()
-            theta_init = torch.tensor([2.0, 0.0, 0.0, 0.0, -1.0])
-            #alignment is (log(c_d/(1-c_d)), 
-            #\theta_q, \theta_{\sigma,1}, \theta_{\sigma,2}, \theta_{\gamma})
-            #alignment of SimpleTM: (\theta_{d,1}, \theta_{d,2}, 
-            #\theta_q, \theta_{\sigma,1}, \theta_{\sigma,2}, \theta_{\gamma})
-
-        self.augment_data = AugmentData()
-        
-        if parametric_kernel == "matern":
-            if param_nu is None:
-                param_nu = 1.5
-            else:
-                assert param_nu in (0.5, 1.5, 2.5)
-            self.parametric_kernel = ParametricKernel(parkernel = CustomMaternKernel(fix_nu=param_nu), 
-                                                      ls = param_ls,
-                                                      data=data)
-        elif parametric_kernel == "sqexponential":
-            self.parametric_kernel = ParametricKernel(parkernel = CustomMaternKernel(fix_nu=torch.inf),
-                                                      ls = param_ls,
-                                                      data=data)
-        elif parametric_kernel == "exponential":
-            self.parametric_kernel = ParametricKernel(parkernel = CustomMaternKernel(fix_nu=0.5),
-                                                      ls = param_ls,
-                                                      data=data)
-        
-        self.nugget_shrinkage_factor = torch.nn.Parameter(theta_init[0])
-        self.kernel = ShrinkTransportMapKernel(theta_init[1:], smooth=transportmap_smooth)
-        self.intloglik = IntLogLik()
-        self.data = data
-        self.nug_mult_bounded = nug_mult_bounded
-        self._tracked_values: dict[str, torch.Tensor] = {}
-
-    def transform_shrinkage_factor(self) -> torch.Tensor:
-        if self.nug_mult_bounded:
-            y = 1 - self.nugget_shrinkage_factor.exp().add(1).reciprocal()
-        else:
-            y = self.nugget_shrinkage_factor.exp()
-        return y
-    
-    def forward(
-        self, batch_idx: None | torch.Tensor = None, data: None | Data = None
-    ) -> torch.Tensor:
-        
-        if data is None:
-            data = self.data
-        aug_data: AugmentedData = self.augment_data(data, batch_idx)
-        kernel_mean_factor, nugget_mean = self.parametric_kernel(batch_idx)
-        kernel_mean = compute_shrinkage_means(aug_data, kernel_mean_factor)
-        #if batch_idx is None:   
-        #    nugget_mean = self.shrinkage_var
-        #    kernel_mean_factor = self.shrinkage_mean
-        #else:
-        #    nugget_mean = self.shrinkage_var[batch_idx]
-        #    kernel_mean = self.shrinkage_mean[: ,batch_idx]
-        
-        kernel_result = self.kernel(data = aug_data, 
-                                    nug_mean = nugget_mean)
-        nug_mult = self.transform_shrinkage_factor()
-        intloglik = self.intloglik(data = aug_data, 
-                                   kernel_result = kernel_result, 
-                                   nug_mult = nug_mult, 
-                                   f_mean = kernel_mean)
-
-        loss = -aug_data.data_size / aug_data.batch_size * intloglik.sum()
-        return loss
-
-    def named_tracked_values(
-        self,
-        prefix: str = "",
-        recurse: bool = True,
-    ) -> Iterator[tuple[str, torch.Tensor]]:
-        gen = self._named_members(
-            lambda module: getattr(module, "_tracked_values", {}).items(),
-            prefix=prefix,
-            recurse=recurse,
-        )
-        yield from gen
-    
-    def fit(
-        self,
-        num_iter,
-        init_lr: float,
-        batch_size: None | int = None,
-        test_data: Data | None = None,
-        optimizer: None | torch.optim.Optimizer = None,
-        scheduler: None | torch.optim.lr_scheduler.LRScheduler = None,
-        stopper: None | PEarlyStopper = None,
-        silent: bool = False,
-    ):
-        """
-        Fit the model to the data.
-
-        Parameters
-        ----------
-        num_iter
-            Number of iterations to run the optimizer.
-        init_lr
-            Initial learning rate. Only used if optimizer is None.
-        batch_size
-            Batch size for training. If None, use all data.
-        test_data
-            Data to use for testing. If None, do not test.
-        optimizer
-            Optimizer to use. If None, use Adam.
-        scheduler
-            Learning rate scheduler to use. If None, CosineAnnealingLR
-            is used with default optimizer.
-        stopper
-            An early stopper. If None, no early stopping is used. Requires test data.
-        silent
-            If True, do not print progress.
-        """
-
-        if optimizer is None:
-            if scheduler is not None:
-                raise ValueError(
-                    "Cannot specify scheduler without speicifying an optimizer."
-                )
-            optimizer = torch.optim.Adam(self.parameters(), lr=init_lr)
-            if scheduler is None:
-                scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-                    optimizer, T_max=num_iter
-                )
-
-        if stopper is not None and test_data is None:
-            raise ValueError("Cannot use stopper without test data.")
-
-        if batch_size is None:
-            batch_size = self.data.response.shape[1]
-
-        data_size = self.data.response.shape[1]
-        if batch_size > data_size:
-            raise ValueError(
-                f"Batch size {batch_size} is larger than data size {data_size}."
-            )
-
-        losses: list[float] = [self().item()]
-        test_losses: list[float] = (
-            [] if test_data is None else [self(data=test_data).item()]
-        )
-        #parameters = [
-        #    {k: np.copy(v.detach().numpy()) for k, v in self.named_parameters()}
-        #]
-        #values = [
-        #    {k: np.copy(v.detach().numpy()) for k, v in self.named_tracked_values()}
-        #]
-
-        for _ in (tqdm_obj := tqdm(range(num_iter), disable=silent)):
-            # create batches
-            if batch_size == data_size:
-                idxes = [torch.arange(data_size)]
-            else:
-                idxes = torch.randperm(data_size).split(batch_size)
-                # skip non-full batch
-                if idxes[-1].shape[0] < batch_size:
-                    idxes = idxes[:-1]
-
-            # update for each batch
-            epoch_losses = np.zeros(len(idxes))
-            for j, idx in enumerate(idxes):
-
-                def closure():
-                    optimizer.zero_grad()  # type: ignore # optimizer is not None
-                    loss = self(batch_idx=idx)
-                    loss.backward()
-                    return loss
-
-                # closure returns a tensor (which is needed for backprop).
-                # pytorch's type signature is wrong
-                loss: float = optimizer.step(closure).item()  # type: ignore
-                epoch_losses[j] = loss
-
-            if scheduler is not None:
-                scheduler.step()
-            losses.append(float(np.mean(epoch_losses)))
-
-            desc = f"Train Loss: {losses[-1]:.3f}"
-            # validate
-            if test_data is not None:
-                with torch.no_grad():
-                    test_losses.append(self(data=test_data).item())
-                desc += f", Test Loss: {test_losses[-1]:.3f}"
-
-            # store parameters and values
-            #parameters.append(
-            #    {k: np.copy(v.detach().numpy()) for k, v in self.named_parameters()}
-            #)
-            #values.append(
-            #    {k: np.copy(v.detach().numpy()) for k, v in self.named_tracked_values()}
-            #)
-
-            tqdm_obj.set_description(desc)
-
-            if stopper is not None:
-                state = {k: v.detach().clone() for k, v in self.state_dict().items()}
-                stop = stopper.step(test_losses[-1], state)
-                if stop:
-                    # restore best state
-                    self.load_state_dict(stopper.best_state())
-                    # and break
-                    break
-
-        param_chain = {}
-        #for k in parameters[0].keys():
-        #    param_chain[k] = np.stack([d[k] for d in parameters], axis=0)
-
-        tracked_chain = {}
-        #for k in values[0].keys():
-        #    tracked_chain[k] = np.stack([d[k] for d in values], axis=0)
-
-        return losses, test_losses#FitResult(
-            #model=self,
-            #max_m=self.data.conditioning_sets.shape[-1],
-            #losses=np.array(losses),
-            #parameters=parameters[-1],
-            #test_losses=np.array(test_losses) if test_data is not None else None,
-            #param_chain=param_chain,
-            #tracked_chain=tracked_chain,
-        #)
-
-    @torch.inference_mode()
-    def cond_sample(
-        self,
-        x_fix=torch.tensor([]),
-        last_ind=None,
-        num_samples: int = 1,
-    ):
-        """
-        I'm not sure where this should exactly be implemented.
-
-        I guess, best ist in the likelihood nn.Module but it needs access to the
-        kernel module as well.
-
-        In any case, this class should expose an interface.
-        """
-
-        augmented_data: AugmentedData = self.augment_data(self.data, None)
-
-        data = self.data.response
-        NN = self.data.conditioning_sets
-        scales = augmented_data.scales
-        sigmas = self.kernel._sigmas(scales)
-
-        shrinkage_mean_factor, nug_mean,_ = self.parametric_kernel._calculate_weights(torch.arange(self.data.locs.shape[0]))
-
-        shrinkage_mean = compute_shrinkage_means(self.data, shrinkage_mean_factor)
-        nug_mult = self.transform_shrinkage_factor()
-        kernel_result = self.kernel.forward(augmented_data, nug_mean)
-        nugget_mean = kernel_result.nug_mean
-        chol = kernel_result.GChol
-
-        tmp_res = self.intloglik.precalc(kernel_result, augmented_data.response, shrinkage_mean, 
-                                         nug_mult)
-        y_tilde = tmp_res.y_tilde
-        beta_post = tmp_res.beta_post
-        alpha_post = tmp_res.alpha_post
-        n, N = data.shape
-        m = NN.shape[1]
-        if last_ind is None:
-            last_ind = N
-        # loop over variables/locations
-        x_new = torch.empty((num_samples, N))
-        x_new[:, : x_fix.size(0)] = x_fix.repeat(num_samples, 1)
-        x_new[:, x_fix.size(0) :] = 0.0
-        for i in range(x_fix.size(0), last_ind):
-            # predictive distribution for current sample
-            if i == 0:
-                cStar = torch.zeros((num_samples, n))
-                prVar = torch.zeros((num_samples,))
-            else:
-                ncol = min(i, m)
-                X = data[:, NN[i, :ncol]]
-                XPred = x_new[:, NN[i, :ncol]].unsqueeze(1)
-                cStar = self.kernel._shrink_kernel_fun(
-                    XPred, sigmas[i], nugget_mean[i], X
-                ).squeeze(1)
-                
-                prVar = self.kernel._shrink_kernel_fun(
-                    XPred, sigmas[i], nugget_mean[i]).squeeze((1, 2))
-            
-            cChol = torch.linalg.solve_triangular(
-                chol[i, :, :], cStar.unsqueeze(-1), upper=False
-            ).squeeze(-1)
-            meanPred = y_tilde[i, :].unsqueeze(0).mul(cChol).sum(1)
-            varPredNoNug = prVar - cChol.square().sum(1)
-
-            if i > 0:
-                meanPred = (meanPred + 
-                    ((XPred.squeeze(-1)) @ (shrinkage_mean_factor[i, :ncol].unsqueeze(1))).squeeze())
-
-            # sample
-            invGDist = InverseGamma(concentration=alpha_post[i], rate=beta_post[i])
-            nugget = invGDist.sample((num_samples,))
-            uniNDist = Normal(loc=meanPred, scale=nugget.mul(1.0 + varPredNoNug).sqrt())
-            x_new[:, i] = uniNDist.sample()
-
-        return x_new
-    
-    @torch.inference_mode()
-    def score(self, obs, x_fix=torch.tensor([]), last_ind=None):
-        """
-        I'm not sure where this should exactly be implemented.
-
-        I guess, best ist in the likelihood nn.Module but it needs access to the
-        kernel module as well.
-
-        In any case, this class should expose an interface.
-
-        Also, this function shares a lot of code with cond sample. that should
-        be refactored
-        """
-
-        if isinstance(last_ind, int) and last_ind < x_fix.size(-1):
-            raise ValueError("last_ind must be larger than conditioned field x_fix.")
-
-        augmented_data: AugmentedData = self.augment_data(self.data, None)
-
-        data = self.data.response
-        NN = self.data.conditioning_sets
-        # response = augmented_data.response
-        # response_neighbor_values = augmented_data.response_neighbor_values
-        scales = augmented_data.scales
-        sigmas = self.kernel._sigmas(scales)
-
-        shrinkage_mean_factor, nug_mean,_ = self.parametric_kernel._calculate_weights(torch.arange(self.data.locs.shape[0]))
-
-        shrinkage_mean = compute_shrinkage_means(self.data, shrinkage_mean_factor)
-
-        nug_mult = self.transform_shrinkage_factor()
-        kernel_result = self.kernel.forward(augmented_data, nug_mean)
-        nugget_mean = kernel_result.nug_mean
-        chol = kernel_result.GChol
-
-        tmp_res = self.intloglik.precalc(kernel_result, augmented_data.response, shrinkage_mean, 
-                                         nug_mult)
-        y_tilde = tmp_res.y_tilde
-        beta_post = tmp_res.beta_post
-        alpha_post = tmp_res.alpha_post
-        n, N = data.shape
-        m = NN.shape[1]
-
-        if last_ind is None:
-            last_ind = N
-        # loop over variables/locations
-        score = torch.zeros(N)
-        for i in range(x_fix.size(0), last_ind):
-            # predictive distribution for current sample
-            if i == 0:
-                cStar = torch.zeros(n)
-                prVar = torch.tensor(0.0)
-            else:
-                ncol = min(i, m)
-                X = data[:, NN[i, :ncol]]
-                XPred = obs[NN[i, :ncol]].unsqueeze(
-                    0
-                )  # this line is different than in cond_sampl
-                cStar = self.kernel._shrink_kernel_fun(
-                    XPred, sigmas[i], nugget_mean[i], X
-                ).squeeze()
-                prVar = self.kernel._shrink_kernel_fun(
-                    XPred, sigmas[i], nugget_mean[i],
-                ).squeeze()
-            cChol = torch.linalg.solve_triangular(
-                chol[i, :, :], cStar.unsqueeze(1), upper=False
-            ).squeeze()
-            
-            meanPred = y_tilde[i, :].mul(cChol).sum()
-            if i > 0:
-                meanPred = meanPred + (shrinkage_mean_factor[i, :ncol] * XPred.squeeze()).sum()
-
-            varPredNoNug = prVar - cChol.square().sum()
-
-            # score
-            initVar = beta_post[i] / alpha_post[i] * (1 + varPredNoNug)
-            STDist = StudentT(2 * alpha_post[i])
-            score[i] = (
-                STDist.log_prob((obs[i] - meanPred) / initVar.sqrt())
-                - 0.5 * initVar.log()
-            )
-
-        return score[x_fix.size(0) :].sum()
-
-
-class EstimableShrinkTMRefactor(torch.nn.Module):
-    def __init__(
-        self,
-        data: Data,
-        parametric_kernel: str,
-        theta_init: None | torch.Tensor = None,
-        linear: bool = False,
-        transportmap_smooth: float = 1.5,
-        param_nu: None | float = None,
-        nug_mult_bounded: bool = True,
         param_ls: None | float = 1.0,
-        **kwargs
+        **kwargs,
     ) -> None:
         super().__init__()
 
@@ -1150,34 +716,36 @@ class EstimableShrinkTMRefactor(torch.nn.Module):
         if theta_init is None:
             # This is essentially \log E[y^2] over the spatial dim
             # to initialize the nugget mean.
-            #log_2m = data.response[:, 0].square().mean().log()
+            # log_2m = data.response[:, 0].square().mean().log()
             theta_init = torch.tensor([2.0, 0.0, 0.0, 0.0, -1.0])
-            #alignment is (log(c_d/(1-c_d)), 
-            #\theta_q, \theta_{\sigma,1}, \theta_{\sigma,2}, \theta_{\gamma})
-            #alignment of SimpleTM: (\theta_{d,1}, \theta_{d,2}, 
-            #\theta_q, \theta_{\sigma,1}, \theta_{\sigma,2}, \theta_{\gamma})
+            # alignment is (log(c_d/(1-c_d)),
+            # \theta_q, \theta_{\sigma,1}, \theta_{\sigma,2}, \theta_{\gamma})
+            # alignment of SimpleTM: (\theta_{d,1}, \theta_{d,2},
+            # \theta_q, \theta_{\sigma,1}, \theta_{\sigma,2}, \theta_{\gamma})
 
         self.augment_data = AugmentData()
-        
+
         if parametric_kernel == "matern":
             if param_nu is None:
                 param_nu = 1.5
             else:
                 assert param_nu in (0.5, 1.5, 2.5)
-            self.parametric_kernel = ParametricKernelRefactor(parkernel = BaseKernel(nu=param_nu), 
-                                                      ls = param_ls,
-                                                      data=data)
+            self.parametric_kernel = ParametricKernel(
+                parkernel=BaseKernel(nu=param_nu), ls=param_ls, data=data
+            )
         elif parametric_kernel == "sqexponential":
-            self.parametric_kernel = ParametricKernelRefactor(parkernel = BaseKernel(nu=torch.inf),
-                                                      ls = param_ls,
-                                                      data=data)
+            self.parametric_kernel = ParametricKernel(
+                parkernel=BaseKernel(nu=torch.inf), ls=param_ls, data=data
+            )
         elif parametric_kernel == "exponential":
-            self.parametric_kernel = ParametricKernelRefactor(parkernel = BaseKernel(nu=0.5),
-                                                      ls = param_ls,
-                                                      data=data)
-        
+            self.parametric_kernel = ParametricKernel(
+                parkernel=BaseKernel(nu=0.5), ls=param_ls, data=data
+            )
+
         self.nugget_shrinkage_factor = torch.nn.Parameter(theta_init[0])
-        self.kernel = ShrinkTransportMapKernel(theta_init[1:], smooth=transportmap_smooth)
+        self.kernel = ShrinkTransportMapKernel(
+            theta_init[1:], smooth=transportmap_smooth
+        )
         self.intloglik = IntLogLik()
         self.data = data
         self.nug_mult_bounded = nug_mult_bounded
@@ -1189,30 +757,31 @@ class EstimableShrinkTMRefactor(torch.nn.Module):
         else:
             y = self.nugget_shrinkage_factor.exp()
         return y
-    
+
     def forward(
         self, batch_idx: None | torch.Tensor = None, data: None | Data = None
     ) -> torch.Tensor:
-        
+
         if data is None:
             data = self.data
         aug_data: AugmentedData = self.augment_data(data, batch_idx)
         kernel_mean_factor, nugget_mean = self.parametric_kernel(batch_idx)
         kernel_mean = compute_shrinkage_means(aug_data, kernel_mean_factor)
-        #if batch_idx is None:   
+        # if batch_idx is None:
         #    nugget_mean = self.shrinkage_var
         #    kernel_mean_factor = self.shrinkage_mean
-        #else:
+        # else:
         #    nugget_mean = self.shrinkage_var[batch_idx]
         #    kernel_mean = self.shrinkage_mean[: ,batch_idx]
-        
-        kernel_result = self.kernel(data = aug_data, 
-                                    nug_mean = nugget_mean)
+
+        kernel_result = self.kernel(data=aug_data, nug_mean=nugget_mean)
         nug_mult = self.transform_shrinkage_factor()
-        intloglik = self.intloglik(data = aug_data, 
-                                   kernel_result = kernel_result, 
-                                   nug_mult = nug_mult, 
-                                   f_mean = kernel_mean)
+        intloglik = self.intloglik(
+            data=aug_data,
+            kernel_result=kernel_result,
+            nug_mult=nug_mult,
+            f_mean=kernel_mean,
+        )
 
         loss = -aug_data.data_size / aug_data.batch_size * intloglik.sum()
         return loss
@@ -1228,7 +797,7 @@ class EstimableShrinkTMRefactor(torch.nn.Module):
             recurse=recurse,
         )
         yield from gen
-    
+
     def fit(
         self,
         num_iter,
@@ -1291,12 +860,12 @@ class EstimableShrinkTMRefactor(torch.nn.Module):
         test_losses: list[float] = (
             [] if test_data is None else [self(data=test_data).item()]
         )
-        #parameters = [
+        # parameters = [
         #    {k: np.copy(v.detach().numpy()) for k, v in self.named_parameters()}
-        #]
-        #values = [
+        # ]
+        # values = [
         #    {k: np.copy(v.detach().numpy()) for k, v in self.named_tracked_values()}
-        #]
+        # ]
 
         for _ in (tqdm_obj := tqdm(range(num_iter), disable=silent)):
             # create batches
@@ -1335,12 +904,12 @@ class EstimableShrinkTMRefactor(torch.nn.Module):
                 desc += f", Test Loss: {test_losses[-1]:.3f}"
 
             # store parameters and values
-            #parameters.append(
+            # parameters.append(
             #    {k: np.copy(v.detach().numpy()) for k, v in self.named_parameters()}
-            #)
-            #values.append(
+            # )
+            # values.append(
             #    {k: np.copy(v.detach().numpy()) for k, v in self.named_tracked_values()}
-            #)
+            # )
 
             tqdm_obj.set_description(desc)
 
@@ -1354,22 +923,22 @@ class EstimableShrinkTMRefactor(torch.nn.Module):
                     break
 
         param_chain = {}
-        #for k in parameters[0].keys():
+        # for k in parameters[0].keys():
         #    param_chain[k] = np.stack([d[k] for d in parameters], axis=0)
 
         tracked_chain = {}
-        #for k in values[0].keys():
+        # for k in values[0].keys():
         #    tracked_chain[k] = np.stack([d[k] for d in values], axis=0)
 
-        return losses#FitResult(
-            #model=self,
-            #max_m=self.data.conditioning_sets.shape[-1],
-            #losses=np.array(losses),
-            #parameters=parameters[-1],
-            #test_losses=np.array(test_losses) if test_data is not None else None,
-            #param_chain=param_chain,
-            #tracked_chain=tracked_chain,
-        #)
+        return losses  # FitResult(
+        # model=self,
+        # max_m=self.data.conditioning_sets.shape[-1],
+        # losses=np.array(losses),
+        # parameters=parameters[-1],
+        # test_losses=np.array(test_losses) if test_data is not None else None,
+        # param_chain=param_chain,
+        # tracked_chain=tracked_chain,
+        # )
 
     @torch.inference_mode()
     def cond_sample(
@@ -1394,7 +963,9 @@ class EstimableShrinkTMRefactor(torch.nn.Module):
         scales = augmented_data.scales
         sigmas = self.kernel._sigmas(scales)
 
-        shrinkage_mean_factor, nug_mean,_ = self.parametric_kernel._calculate_weights(torch.arange(self.data.locs.shape[0]))
+        shrinkage_mean_factor, nug_mean = self.parametric_kernel._calculate_weights(
+            torch.arange(self.data.locs.shape[0])
+        )
 
         shrinkage_mean = compute_shrinkage_means(self.data, shrinkage_mean_factor)
         nug_mult = self.transform_shrinkage_factor()
@@ -1402,8 +973,9 @@ class EstimableShrinkTMRefactor(torch.nn.Module):
         nugget_mean = kernel_result.nug_mean
         chol = kernel_result.GChol
 
-        tmp_res = self.intloglik.precalc(kernel_result, augmented_data.response, shrinkage_mean, 
-                                         nug_mult)
+        tmp_res = self.intloglik.precalc(
+            kernel_result, augmented_data.response, shrinkage_mean, nug_mult
+        )
         y_tilde = tmp_res.y_tilde
         beta_post = tmp_res.beta_post
         alpha_post = tmp_res.alpha_post
@@ -1427,10 +999,11 @@ class EstimableShrinkTMRefactor(torch.nn.Module):
                 cStar = self.kernel._shrink_kernel_fun(
                     XPred, sigmas[i], nugget_mean[i], X
                 ).squeeze(1)
-                
+
                 prVar = self.kernel._shrink_kernel_fun(
-                    XPred, sigmas[i], nugget_mean[i]).squeeze((1, 2))
-            
+                    XPred, sigmas[i], nugget_mean[i]
+                ).squeeze((1, 2))
+
             cChol = torch.linalg.solve_triangular(
                 chol[i, :, :], cStar.unsqueeze(-1), upper=False
             ).squeeze(-1)
@@ -1438,8 +1011,13 @@ class EstimableShrinkTMRefactor(torch.nn.Module):
             varPredNoNug = prVar - cChol.square().sum(1)
 
             if i > 0:
-                meanPred = (meanPred + 
-                    ((XPred.squeeze(-1)) @ (shrinkage_mean_factor[i, :ncol].unsqueeze(1))).squeeze())
+                meanPred = (
+                    meanPred
+                    + (
+                        (XPred.squeeze(-1))
+                        @ (shrinkage_mean_factor[i, :ncol].unsqueeze(1))
+                    ).squeeze()
+                )
 
             # sample
             invGDist = InverseGamma(concentration=alpha_post[i], rate=beta_post[i])
@@ -1448,7 +1026,7 @@ class EstimableShrinkTMRefactor(torch.nn.Module):
             x_new[:, i] = uniNDist.sample()
 
         return x_new
-    
+
     @torch.inference_mode()
     def score(self, obs, x_fix=torch.tensor([]), last_ind=None):
         """
@@ -1475,7 +1053,9 @@ class EstimableShrinkTMRefactor(torch.nn.Module):
         scales = augmented_data.scales
         sigmas = self.kernel._sigmas(scales)
 
-        shrinkage_mean_factor, nug_mean,_ = self.parametric_kernel._calculate_weights(torch.arange(self.data.locs.shape[0]))
+        shrinkage_mean_factor, nug_mean = self.parametric_kernel._calculate_weights(
+            torch.arange(self.data.locs.shape[0])
+        )
 
         shrinkage_mean = compute_shrinkage_means(self.data, shrinkage_mean_factor)
 
@@ -1484,8 +1064,9 @@ class EstimableShrinkTMRefactor(torch.nn.Module):
         nugget_mean = kernel_result.nug_mean
         chol = kernel_result.GChol
 
-        tmp_res = self.intloglik.precalc(kernel_result, augmented_data.response, shrinkage_mean, 
-                                         nug_mult)
+        tmp_res = self.intloglik.precalc(
+            kernel_result, augmented_data.response, shrinkage_mean, nug_mult
+        )
         y_tilde = tmp_res.y_tilde
         beta_post = tmp_res.beta_post
         alpha_post = tmp_res.alpha_post
@@ -1511,15 +1092,19 @@ class EstimableShrinkTMRefactor(torch.nn.Module):
                     XPred, sigmas[i], nugget_mean[i], X
                 ).squeeze()
                 prVar = self.kernel._shrink_kernel_fun(
-                    XPred, sigmas[i], nugget_mean[i],
+                    XPred,
+                    sigmas[i],
+                    nugget_mean[i],
                 ).squeeze()
             cChol = torch.linalg.solve_triangular(
                 chol[i, :, :], cStar.unsqueeze(1), upper=False
             ).squeeze()
-            
+
             meanPred = y_tilde[i, :].mul(cChol).sum()
             if i > 0:
-                meanPred = meanPred + (shrinkage_mean_factor[i, :ncol] * XPred.squeeze()).sum()
+                meanPred = (
+                    meanPred + (shrinkage_mean_factor[i, :ncol] * XPred.squeeze()).sum()
+                )
 
             varPredNoNug = prVar - cChol.square().sum()
 

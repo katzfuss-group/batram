@@ -9,6 +9,7 @@ from math import sqrt
 from gpytorch import add_jitter, kernels
 from linear_operator import to_linear_operator
 
+
 def make_grid(nlocs: int, ndims: int) -> np.ndarray:
     """
     Make a grid of equally spaced points in a unit hypercube.
@@ -47,7 +48,7 @@ class GaussianProcessGenerator:
         chol = linalg.cholesky(cov, lower=True)
         z = stats.multivariate_normal(cov=np.eye(chol.shape[0])).rvs(num_reps)
         return np.dot(chol, z.T).T
-    
+
     def sample_seed(self, num_reps: int = 1, seed: int = 42):
         """
         Sample from the Gaussian Process.
@@ -56,40 +57,47 @@ class GaussianProcessGenerator:
         covar = self.kernel(self.locs)
         covar += self.sd_noise**2 * np.eye(covar.shape[0])
         chol = linalg.cholesky(covar, lower=True)
-        z = stats.multivariate_normal(cov=np.eye(chol.shape[0]), seed=np.random.seed(seed)).rvs(num_reps)
+        z = stats.multivariate_normal(
+            cov=np.eye(chol.shape[0]), seed=np.random.seed(seed)
+        ).rvs(num_reps)
         return np.dot(chol, z.T).T
-    
+
 
 class CustomMaternKernel(torch.nn.Module):
     """Initializes a Matern Kernel."""
+
     def __init__(self, **kwargs):
         super().__init__()
         fix_nu = kwargs.get("fix_nu", 1.5)
         self.nu = fix_nu
-        
-    
-    def forward(self, length_scale: torch.Tensor, locs_X:torch.Tensor, locs_Y: torch.Tensor | None):
+
+    def forward(
+        self,
+        length_scale: torch.Tensor,
+        locs_X: torch.Tensor,
+        locs_Y: torch.Tensor | None,
+    ):
 
         if locs_Y is None:
             distmatrix = torch.pdist(locs_X)
         else:
             assert locs_X.shape[1] == locs_Y.shape[1]
             distmatrix = torch.cdist(locs_X, locs_Y)
-        distmatrix =  distmatrix.div(length_scale)
+        distmatrix = distmatrix.div(length_scale)
 
         ## this part is mostly copied from sklearn.gaussian_process.kernels.py
-        if (self.nu == 0.5):
+        if self.nu == 0.5:
             K = torch.exp(-distmatrix)
-        elif (self.nu == 1.5):
+        elif self.nu == 1.5:
             K = distmatrix.mul((torch.Tensor([3])).sqrt())
             K = (1.0 + K) * torch.exp(-K)
-        elif (self.nu == 2.5):
+        elif self.nu == 2.5:
             K = distmatrix.mul((torch.Tensor([5])).sqrt())
             K = (1.0 + K + (K**2).div(torch.Tensor([3.0]))) * torch.exp(-K)
         elif self.nu == torch.inf:
             K = torch.exp(-(distmatrix**2).div(torch.Tensor([2.0])))
         return K
-        
+
 
 class BaseKernel(kernels.Kernel):
     """A flexible Matern or RBF (Gaussian) kernel parameterized by `nu`.
