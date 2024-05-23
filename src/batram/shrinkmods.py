@@ -627,7 +627,6 @@ class ParametricKernel(torch.nn.Module):
     def __init__(
         self,
         parkernel: BaseKernel,
-        # log_ls : float | None,
         data: Data,
         **kwargs,
     ) -> None:
@@ -635,6 +634,7 @@ class ParametricKernel(torch.nn.Module):
         self.kernel = parkernel
         ls = kwargs.get("ls", 1.0)
         self.log_ls = torch.nn.Parameter(torch.tensor([ls]).log())
+        self.log_sigmasq = torch.nn.Parameter(torch.tensor([-1.0]))
         param_nugget = kwargs.get("param_nugget", 1e-6)
         self.param_nugget = param_nugget
         self.data = data
@@ -678,12 +678,12 @@ class ParametricKernel(torch.nn.Module):
         prev_covars_batchchol = torch.linalg.cholesky(previous_covars_batch)
         prev_covars_batchinv = (torch.cholesky_inverse(prev_covars_batchchol)).to_dense()
 
-        parametric_mean_factors = (current_covars_batch.unsqueeze(1) @ prev_covars_batchinv).squeeze()
-        parametric_variances = 1 - ((parametric_mean_factors.unsqueeze(1) @ 
-                                     current_covars_batch.unsqueeze(-1))).squeeze()
+        parametric_mean_factors = ((current_covars_batch.unsqueeze(1) @ prev_covars_batchinv).squeeze())
+        parametric_variances = (1 - ((parametric_mean_factors.unsqueeze(1) @ 
+                                     current_covars_batch.unsqueeze(-1))).squeeze())
 
-
-        return parametric_mean_factors, parametric_variances
+        outer_variance = self.log_sigmasq.exp()
+        return parametric_mean_factors, (outer_variance * parametric_variances)
 
     def forward(
         self, batch_idx: torch.Tensor | None
@@ -693,6 +693,7 @@ class ParametricKernel(torch.nn.Module):
         if batch_idx is None:
             batch_idx = torch.arange(self.data.locs.shape[0])
         mean_factors, variances = self._calculate_weights(batch_idx)
+        
         return mean_factors, variances
 
 class EstimableShrinkTM(torch.nn.Module):
@@ -1126,7 +1127,7 @@ class FitResult:
     Result of a fit.
     """
 
-    model: ShrinkTM | EstimableShrinkTM | EstimableShrinkTMRefactor
+    model: ShrinkTM | EstimableShrinkTM
     max_m: int
     losses: np.ndarray
     test_losses: None | np.ndarray
