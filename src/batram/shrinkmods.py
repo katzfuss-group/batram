@@ -628,13 +628,24 @@ class ParametricKernel(torch.nn.Module):
         self,
         parkernel: BaseKernel,
         data: Data,
+        sigmasq: float|None = None,
         **kwargs,
     ) -> None:
         super().__init__()
         self.kernel = parkernel
         ls = kwargs.get("ls", 1.0)
         self.log_ls = torch.nn.Parameter(torch.tensor([ls]).log())
-        self.log_sigmasq = torch.nn.Parameter(torch.tensor([-1.0]))
+        train_sigmasq = kwargs.get("train_sigmasq", True)
+        
+        if sigmasq is None:
+            sigmasq = 0.36
+        #if train_sigmasq and (sigmasq is not None):
+        #    raise ValueError("Please provide either a fixed value for the parametric variance $$\\sigma^2$$ or set train_sigmasq to False.")
+        
+        if train_sigmasq:
+            self.log_sigmasq = torch.nn.Parameter((torch.tensor([sigmasq])).log())
+        else:
+            self.log_sigmasq = torch.tensor([sigmasq]).log()
         param_nugget = kwargs.get("param_nugget", 1e-6)
         self.param_nugget = param_nugget
         self.data = data
@@ -707,13 +718,19 @@ class EstimableShrinkTM(torch.nn.Module):
         param_nu: None | float = None,
         nug_mult_bounded: bool = True,
         param_ls: None | float = 1.0,
+        train_param_var: bool = True,
         **kwargs,
     ) -> None:
         super().__init__()
 
         if linear:
             raise ValueError("Linear TM not implemented yet.")
-
+        
+        param_var_init = kwargs.get("param_var_init", None)
+        if ((not train_param_var) and (param_var_init is None)):
+            raise ValueError("Please supply the value of the variable param_var_init, the fixed variance of the parametric kernel.")
+        if ((param_var_init is not None) and (param_var_init < 0)):
+            raise ValueError("The value of the variable param_var_init must be positive.")
         if theta_init is None:
             # This is essentially \log E[y^2] over the spatial dim
             # to initialize the nugget mean.
@@ -732,15 +749,18 @@ class EstimableShrinkTM(torch.nn.Module):
             else:
                 assert param_nu in (0.5, 1.5, 2.5)
             self.parametric_kernel = ParametricKernel(
-                parkernel=BaseKernel(nu=param_nu), ls=param_ls, data=data
+                parkernel=BaseKernel(nu=param_nu), ls=param_ls, data=data,
+                sigmasq = param_var_init, train_sigmasq=train_param_var
             )
         elif parametric_kernel == "sqexponential":
             self.parametric_kernel = ParametricKernel(
-                parkernel=BaseKernel(nu=torch.inf), ls=param_ls, data=data
+                parkernel=BaseKernel(nu=torch.inf), ls=param_ls, data=data,
+                sigmasq = param_var_init, train_sigmasq=train_param_var
             )
         elif parametric_kernel == "exponential":
             self.parametric_kernel = ParametricKernel(
-                parkernel=BaseKernel(nu=0.5), ls=param_ls, data=data
+                parkernel=BaseKernel(nu=0.5), ls=param_ls, data=data,
+                sigmasq = param_var_init, train_sigmasq=train_param_var
             )
 
         self.nugget_shrinkage_factor = torch.nn.Parameter(theta_init[0])
