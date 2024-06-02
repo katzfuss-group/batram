@@ -160,7 +160,7 @@ def main(args: Namespace) -> None:
                     "LST" + 
                     str(ls_transform) + 
                     "SIGSQT" +
-                    int(10 * args.sigmasq_f) +
+                    str(int(10 * args.sigmasq_f)) +
                     ".pkl")
     
     with open(DATAPATH / datafilename, "wb") as f:
