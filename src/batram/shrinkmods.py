@@ -47,6 +47,15 @@ from the parametric kernels.
 def shrink_kernel_fun(X1, theta, sigma, smooth, nuggetMean=None, X2=None):
     N = X1.shape[-1]  # size of the conditioning set
 
+    """
+    Computes a shrinkage version of the GP variance outlined in [1].
+    The original kernel is a combination of a linear and a non-linear part.
+    The shrinkage kernel only includes the non-linear part.
+
+    Input:
+    X1:
+    """
+
     if X2 is None:
         X2 = X1
     if nuggetMean is None:
@@ -66,7 +75,10 @@ def shrink_kernel_fun(X1, theta, sigma, smooth, nuggetMean=None, X2=None):
 def compute_shrinkage_means(
     data: Data | AugmentedData, mean_factor: torch.Tensor
 ) -> torch.Tensor:
-    """Computes the means of the individual regressions."""
+    """
+    Computes the means of the individual regressions.
+
+    """
     # make sure the dimensions match properly
     # the modifications for AugmentedData enables the function to
     # being used in minibatching scheme.
@@ -78,7 +90,11 @@ def compute_shrinkage_means(
     mean_factor = mean_factor.unsqueeze(-1)
     previous_ordered_responses = previous_ordered_responses.permute(1, 0, 2)
 
-    mean_values = (torch.bmm(previous_ordered_responses, mean_factor)).squeeze().mT
+    mean_values = (torch.bmm(previous_ordered_responses, mean_factor)).squeeze()
+    if mean_values.dim() == 1:
+        mean_values = mean_values.unsqueeze(0)
+    else:
+        mean_values = mean_values.mT
     return mean_values
 
 
@@ -93,6 +109,11 @@ def transform_positive_shrink_factor(x: torch.Tensor) -> torch.Tensor:
 
 
 class ShrinkTransportMapKernel(TransportMapKernel):
+    """
+    This class implements the shrinkage version of the transport map kernel,
+    where the linear version of the original kernel is removed and only the
+    non-linear part is kept. The kernel is defined in [1].
+    """
     def __init__(self, theta: torch.Tensor, smooth: float = 1.5) -> None:
         super().__init__(theta, smooth)
 
@@ -103,10 +124,20 @@ class ShrinkTransportMapKernel(TransportMapKernel):
         nug_mean: torch.Tensor,
         x2: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        """Computes the transport map kernel.
-        This version is valid for the shrinkage kernel.
-        It is different from the kernel function in the base class.
-        It does not include the linear part.
+        
+        """
+        Computes a shrinkage version of the GP variance outlined in [1].
+        The original kernel is a combination of a linear and a non-linear part.
+        The shrinkage kernel only includes the non-linear part.
+
+        Input:
+        X1: Data vector of size (N, n_1, m),
+        sigmas: The sigmas for the shrinkage kernel, ideally of order (N, 1, 1),
+        nug_mean: The nugget mean for the shrinkage kernel, ideally of order (N, 1, 1),
+        X2: Data vector of size (N, n_2, m). If None, X2 = X1.
+
+        Output:
+        The shrinkage kernel of size (N, n_1, n_2).
         """
         k = torch.arange(x1.shape[-1]) + 1
         scaling = self._scale(k)
@@ -120,7 +151,6 @@ class ShrinkTransportMapKernel(TransportMapKernel):
         return out
 
     def forward(self, data: AugmentedData, nug_mean: torch.Tensor) -> KernelResult:
-        """Computes with internalized kernel params instead of ParameterBox."""
         max_m = data.max_m
         m = self._determine_m(max_m)
         self._tracked_values["m"] = m
@@ -157,6 +187,10 @@ class ShrinkTransportMapKernel(TransportMapKernel):
 
 
 class IntLogLik(torch.nn.Module):
+    """
+    This class implements the integrated log-likelihood for the shrinkage
+    transport map kernel. The integrated log-likelihood is defined in [1].
+    """
     def __init__(self) -> None:
         super().__init__()
 
@@ -179,6 +213,8 @@ class IntLogLik(torch.nn.Module):
         y_tilde = torch.linalg.solve_triangular(
             kernel_result.GChol, (response - f_mean).t().unsqueeze(-1), upper=False
         ).squeeze()  # (N, n)
+        if y_tilde.dim() == 1:
+            y_tilde = y_tilde.unsqueeze(-1)
         alpha_post = alpha.add(n / 2)  # (N),
         beta_post = beta + y_tilde.square().sum(dim=1).div(2)  # (N,)
 
@@ -716,7 +752,7 @@ class EstimableShrinkTM(torch.nn.Module):
         linear: bool = False,
         transportmap_smooth: float = 1.5,
         param_nu: None | float = None,
-        nug_mult_bounded: bool = True,
+        nug_mult_bounded: bool = False,
         param_ls: None | float = 1.0,
         train_param_var: bool = True,
         **kwargs,
@@ -1112,6 +1148,8 @@ class EstimableShrinkTM(torch.nn.Module):
                 cStar = self.kernel._shrink_kernel_fun(
                     XPred, sigmas[i], nugget_mean[i], X
                 ).squeeze()
+                if (n == 1):
+                    cStar = cStar.view(1)
                 prVar = self.kernel._shrink_kernel_fun(
                     XPred,
                     sigmas[i],

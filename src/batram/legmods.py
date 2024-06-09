@@ -531,6 +531,8 @@ class IntLogLik(torch.nn.Module):
             kernel_result.GChol, response.t().unsqueeze(-1), upper=False
         ).squeeze()  # (N, n)
         alpha_post = alpha.add(n / 2)  # (N),
+        if y_tilde.dim() == 1:
+            y_tilde = y_tilde.unsqueeze(-1)
         beta_post = beta + y_tilde.square().sum(dim=1).div(2)  # (N,)
 
         assert alpha_post.shape == (response.shape[1],)
@@ -751,6 +753,8 @@ class SimpleTM(torch.nn.Module):
                 cStar = kernel_fun(
                     XPred, theta, sigmas[i], smooth, nugget_mean[i], X
                 ).squeeze()
+                if (n == 1):
+                    cStar = cStar.view(1)
                 prVar = kernel_fun(
                     XPred, theta, sigmas[i], smooth, nugget_mean[i]
                 ).squeeze()
