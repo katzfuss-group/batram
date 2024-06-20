@@ -730,7 +730,7 @@ class ParametricKernel(torch.nn.Module):
                                      current_covars_batch.unsqueeze(-1))).squeeze())
 
         outer_variance = self.log_sigmasq.exp()
-        return parametric_mean_factors, (outer_variance * parametric_variances).clamp_min(1e-12)
+        return parametric_mean_factors, (outer_variance * parametric_variances).clamp_min(1e-9)
 
     def forward(
         self, batch_idx: torch.Tensor | None
