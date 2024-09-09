@@ -950,8 +950,8 @@ class SimpleTM(torch.nn.Module):
             last_ind = N
 
         # loop over variables/locations
-        z = np.full((n_input, N), fill_value=np.nan)
-        z_logdet = np.full((n_input, N), fill_value=np.nan)
+        z = torch.full((n_input, N), fill_value=torch.nan)
+        z_logdet = torch.full((n_input, N), fill_value=torch.nan)
 
         for i in range(last_ind):
             # predictive distribution for current sample
@@ -992,8 +992,8 @@ class SimpleTM(torch.nn.Module):
 
             z_logdet[:, i] = (
                 -0.5 * initVar.log()
-                + stats.t.logpdf(z_tilde, df=2 * alpha_post[i])
-                - stats.norm.logpdf(z[:, i])
+                + torch.distributions.StudentT(df=2 * alpha_post[i]).log_prob(z_tilde)
+                - torch.distributions.Normal(loc=0.0, scale=1.0).log_prob(z[:, i])
             )
 
         return z, z_logdet
@@ -1007,11 +1007,8 @@ class SimpleTM(torch.nn.Module):
         z, z_logdet = self.map_and_logdet(obs, last_ind=last_ind)
 
         n_fixed = x_fix.size(0)
-
-        return (
-            stats.norm.logpdf(z[..., n_fixed:last_ind])
-            + z_logdet[..., n_fixed:last_ind]
-        )
+        norm = torch.distributions.Normal(loc=0.0, scale=1.0)
+        return norm.log_prob(z[..., n_fixed:last_ind]) + z_logdet[..., n_fixed:last_ind]
 
     def score(self, obs, x_fix=torch.tensor([]), last_ind=None):
         """
