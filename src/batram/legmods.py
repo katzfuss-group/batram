@@ -763,11 +763,6 @@ class SimpleTM(torch.nn.Module):
                 pnorm = stats.norm.cdf(z[..., i])
                 zt = stats.t.ppf(pnorm, df=2 * alpha_post[i])
 
-                if np.any(np.isinf(pnorm)):
-                    warnings.warn("Inf encouncetered during inversion!")
-                    indices = np.isinf(pnorm).nonzero()
-                    zt[indices] = stats.t.ppf(1 - 1e-6, df=2 * alpha_post[i])
-
                 x_new[:, i] = meanPred + initVar.sqrt() * zt
 
         return x_new
