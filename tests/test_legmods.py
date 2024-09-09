@@ -95,12 +95,11 @@ def test_legmods_cond_samp_bayes(simple_data: Data) -> None:
     tm = SimpleTM(simple_data, theta_init, False, smooth=1.5, nug_mult=4.0)
 
     with torch.no_grad():
+        torch.manual_seed(123)
         sample = tm.cond_sample()
         sample_abs_sum = sample.abs().sum()
 
-    # we do not expect this to hold because of the RNG involved
-    # however, it should be the same for the legacy method and the legmods
-    assert sample_abs_sum == pytest.approx(65.3635, abs=1e-2)
+    assert sample_abs_sum == pytest.approx(57.7792)
 
 
 def test_legmods_cond_samp_multi_samples(simple_data: Data) -> None:
