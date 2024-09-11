@@ -133,14 +133,10 @@ def main(args: Namespace) -> None:
     if args.output == "LR":
         numpydata = gp.sample(num_reps=args.n_samples)
         torchdata = torch.from_numpy(numpydata).float()
-        torchdata = torchdata#[:, locsorder]
     elif args.output == "NR":
         torchdata = _nrsamples(gp, args.max_m, args.n_samples)
-
-
-    ## save data
     
-
+    # save data
     masterfile = {"locs": locs, 
                   "order": locsorder,
                   "gp": gp,
