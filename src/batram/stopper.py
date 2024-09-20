@@ -20,10 +20,10 @@ class EarlyStopper(Generic[TState]):
     Improvement is defined as a decrease in score by at least `min_diff`.
     """
 
-    def __init__(self, patients: int, min_diff: float):
+    def __init__(self, patience: int, min_diff: float):
         self.min_diff = min_diff
-        self.patients = patients
-        self.patients_counter = 0
+        self.patience = patience
+        self.patience_counter = 0
         self.step_counter = 0
         self.min_score = math.inf
         self._best_state: TState | None = None
@@ -31,16 +31,16 @@ class EarlyStopper(Generic[TState]):
     def step(self, score: float, state: TState | None = None) -> bool:
         self.step_counter += 1
         if score + self.min_diff >= self.min_score:
-            self.patients_counter += 1
+            self.patience_counter += 1
         else:
-            self.patients_counter = 0
+            self.patience_counter = 0
 
         if score < self.min_score:
             self.min_score = score
             if state is not None:
                 self._best_state = state
 
-        if self.patients_counter > self.patients:
+        if self.patience_counter > self.patience:
             return True
         else:
             return False
