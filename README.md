@@ -8,6 +8,7 @@ branches for now:
 
 - [Wiemann and Katzfuss (2023)](https://link.springer.com/article/10.1007/s13253-023-00580-z): See branch
   [mvtm](https://github.com/katzfuss-group/batram/tree/mvtm)
+- [Chakraborty and Katzfuss (2024)](https://arxiv.org/pdf/2409.19208): See branch [ShrinkTM](https://github.com/katzfuss-group/batram/tree/ShrinkTM)
 
 ## Installation
 
