@@ -24,6 +24,19 @@ from batram.helpers import make_grid, GaussianProcessGenerator
 
 DATAPATH = Path(__file__).resolve().parent.parent / "data"
 
+RESULTSPATH = Path(__file__).resolve().parent.parent / "results"
+
+PLOTSPATH = Path(__file__).resolve().parent.parent / "plots"
+
+if not DATAPATH.exists():
+    DATAPATH.mkdir()
+
+if not RESULTSPATH.exists():
+    RESULTSPATH.mkdir()
+
+if not PLOTSPATH.exists():
+    PLOTSPATH.mkdir()
+
 parsed_args = ArgumentParser(
     description=(
         "Some arguments for generating the data."
@@ -65,6 +78,7 @@ parsed_args.add_argument(
     "--output", type = str, default="NR",
     help = ("Output data type based on data generating mechanism.")
 )
+
 
 def _calculate_weights(gp: GaussianProcessGenerator,
                        largest_conditioning_set: int) -> tuple[torch.Tensor, torch.Tensor]:
@@ -115,10 +129,10 @@ def _nrsamples(gp: GaussianProcessGenerator, largest_conditioning_set: int, num_
 
     return samples
 
+
 def main(args: Namespace) -> None:
     
     ## generate data
-
     locs = make_grid(args.spatial_grid_size, args.spatial_dim)
     locsorder = orderings.maxmin_cpp(locs=locs) #find maxmin-ordeing
     locs = locs[locsorder, ...]
@@ -137,7 +151,7 @@ def main(args: Namespace) -> None:
         torchdata = _nrsamples(gp, args.max_m, args.n_samples)
     
     # save data
-    masterfile = {"locs": locs, 
+    masterfile = {"locs": locs[locsorder.argsort(),:],
                   "order": locsorder,
                   "gp": gp,
                   "data": torchdata[:, locsorder.argsort()]}
@@ -163,6 +177,7 @@ def main(args: Namespace) -> None:
         pickle.dump(masterfile, f)
         f.close()
     return None
+
 
 if __name__ == "__main__":
     args = parsed_args.parse_args()
