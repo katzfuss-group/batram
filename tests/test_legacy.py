@@ -83,7 +83,7 @@ def test_legacy_simple_data() -> None:
                 mode="intlik",
                 m=torch.as_tensor(max_size_cs),
                 inds=None,
-                scal=scal,
+                scale=scale,
             )
         )
     assert intlik == pytest.approx(-128.11582946777344)

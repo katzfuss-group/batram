@@ -134,3 +134,4 @@ data/
 results/
 plots/
 .vscode/
+!tests/data/
