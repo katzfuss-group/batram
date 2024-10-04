@@ -1,14 +1,7 @@
 # batram
 
-This repository contains a Python implementation of the method described in
-[Katzfuss and Schäfer (2023)](https://doi.org/10.1080/01621459.2023.2197158) as
-well as code from related research projects. We aim to provide a comprehensive
-package integrating all developments. Please refer to the project specific
-branches for now:
-
-- [Wiemann and Katzfuss (2023)](https://link.springer.com/article/10.1007/s13253-023-00580-z): See branch
-  [mvtm](https://github.com/katzfuss-group/batram/tree/mvtm)
-- [Chakraborty and Katzfuss (2024)](https://arxiv.org/pdf/2409.19208): See branch [ShrinkTM](https://github.com/katzfuss-group/batram/tree/ShrinkTM)
+This repository contains a Python implementation of the transport map method, `ShrinkTM` described in
+[Chakraborty and Katzfuss (2024)](https://arxiv.org/pdf/2409.19208).
 
 ## Installation
 
@@ -20,23 +13,21 @@ install the dependecy [veccs](https://github.com/katzfuss-group/veccs).
 
 ### Remarks
 
-- We have observed that the software seems to be unstable on a MacBook Pro with
-  M1 Pro chip when using conda instead of a regular python installation.
+- You must not install legacy [batram](https://github.com/katzfuss-group/batram/tree/main) package separately; all the codes are directly available through the installation of this package. Installation of the legacy `batram` package will create version conflict.
 
+- Please make sure that  all the prerequisite `Python` models along with `batram` is installed and setup properly in your system. We have seen in our experiments that `Python version >= 3.11` creates computational issues in the computations, and downgrading module versions is not straightforward. Hence, we recommend sticking to `Python 3.10`.
 
-## How to contribute?
+## Getting started
 
-1. install the package with the additional dependencies for development using
-   `pip install -e .[dev,docs]`
-2. before pushing on `main` or a PR, run `pre-commit run --all-files` and ensure
-   that all tests pass by running `pytest`.
-3. before pushing on `main` or merging a PR, make sure the code is well
-   documented and covered by tests.
+- For learning how to use `ShrinkTM`, refer to  the [tutorial](notebooks/getting-started.ipynb).
+- For replicating results from the preprint, first produce the simulated samples.
+  - For LR900, use `python scripts/make_data.py --output LR --n_samples 300`.
+  - For NR900, use `python scripts/make_data.py --output NR --n_samples 300`.
+- Once you generate samples, run a [notebook](notebooks/fit-esitmable-shrinkage-tm.ipynb) to perform the experiments and the other [one](notebooks/sim_plots.ipynb) to plot the results.
+- For climate data application, follow the same steps with [climate-data-application](notebooks/climate-data-application.ipynb) and [climate_plots](notebooks/climate_plots.ipynb).
 
-The documentenation can be viewed while editing the code using `mkdocs serve`.
+## Contact
 
-## Acknowledgements
+[Anirban Chakraborty](https://sites.google.com/view/anirban-chakraborty/home), for package development.
 
-An initial Python
-[implementation](https://github.com/katzfuss-group/BaTraMaSpa_py) was provided
-by [Jian Cao](https://www.uh.edu/nsm/math/people/faculty/index.php#assistantprof).
+[Matthias Katzfuss](https://sites.google.com/view/katzfuss/home), to learn more about group's research.
