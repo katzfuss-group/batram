@@ -812,7 +812,7 @@ class EstimableShrinkTM(torch.nn.Module):
         elif parametric_kernel == "exponential":
             self.parametric_kernel = ParametricKernel(
                 parkernel=BaseKernel(nu=0.5), ls=param_ls, data=data,
-                sigmasq = param_var_init, train_sigmasq=train_param_var
+                sigmasq=param_var_init, train_sigmasq=train_param_var
             )
 
         self.nugget_shrinkage_factor = torch.nn.Parameter(theta_init[0])
@@ -1204,104 +1204,3 @@ class EstimableShrinkTM(torch.nn.Module):
             return score, prMeans, prVars, alpha_post, beta_post, nug_mean, prDists
         else:
             return score[x_fix.size(0) :].sum()
-
-
-# FitResult is not correctly managed, but can be used for the time being.
-@dataclass
-class FitResult:
-    """
-    Result of a fit.
-    """
-
-    model: ShrinkTM | EstimableShrinkTM
-    max_m: int
-    losses: np.ndarray
-    test_losses: None | np.ndarray
-    parameters: dict[str, np.ndarray]
-    param_chain: dict[str, np.ndarray]
-    tracked_chain: dict[str, np.ndarray]
-
-    def plot_loss(
-        self,
-        ax: None | plt.Axes = None,
-        use_inset: bool = True,
-        **kwargs,
-    ) -> plt.Axes:
-        """
-        Plot the loss curve.
-        """
-        if ax is None:
-            _, ax = plt.subplots(1, 1)
-
-        (p1,) = ax.plot(self.losses, "C0", label="Train Loss", **kwargs)
-        legend_handle = [p1]
-
-        if self.test_losses is not None:
-            twin = cast(MPLAxes, ax.twinx())
-            (p2,) = twin.plot(self.test_losses, "C1", label="Test Loss", **kwargs)
-            legend_handle.append(p2)
-            twin.set_ylabel("Test Loss")
-
-        if use_inset:
-            end_idx = len(self.losses)
-            start_idx = int(0.8 * end_idx)
-            inset_iterations = np.arange(start_idx, end_idx)
-
-            inset = ax.inset_axes((0.5, 0.5, 0.45, 0.45))
-            inset.plot(inset_iterations, self.losses[start_idx:], "C0", **kwargs)
-
-            if self.test_losses is not None:
-                insert_twim = cast(MPLAxes, inset.twinx())
-                insert_twim.plot(
-                    inset_iterations, self.test_losses[start_idx:], "C1", **kwargs
-                )
-
-        ax.set_xlabel("Iteration")
-        ax.set_ylabel("Train Loss")
-        ax.legend(handles=legend_handle, loc="lower right", bbox_to_anchor=(0.925, 0.2))
-
-        return ax
-
-    def plot_params(self, ax: plt.Axes | None = None, **kwargs) -> plt.Axes:
-        if ax is None:
-            fig, ax = plt.subplots(1, 1)
-
-        ax.plot(
-            self.param_chain["nugget.nugget_params"],
-            label=[f"nugget {i}" for i in range(2)],
-            **kwargs,
-        )
-        ax.plot(
-            self.param_chain["kernel.theta_q"],
-            label="neighbors scale",
-            **kwargs,
-        )
-        ax.plot(
-            self.param_chain["kernel.sigma_params"],
-            label=[f"sigma {i}" for i in range(2)],
-            **kwargs,
-        )
-        ax.plot(
-            self.param_chain["kernel.lengthscale"],
-            label="lengthscale",
-            **kwargs,
-        )
-        ax.set_xlabel("Epoch")
-        ax.set_ylabel("Raw Parameter Value")
-        ax.legend()
-
-        return ax
-
-    def plot_neighbors(self, ax: plt.Axes | None = None, **kwargs) -> plt.Axes:
-        if ax is None:
-            _, ax = plt.subplots(1, 1)
-
-        m = self.tracked_chain["kernel.m"]
-        epochs = np.arange(m.size, **kwargs)
-        ax.step(epochs, m)
-        ax.set_title("Nearest neighbors through optimization")
-        ax.set_xlabel("Epoch")
-        ax.set_ylabel("Number of nearest neighbors (m)")
-        ax.set_ylim(0, self.max_m)
-
-        return ax
