@@ -710,7 +710,7 @@ class SimpleTM(torch.nn.Module):
         if last_ind is None:
             last_ind = N
 
-        x_new = torch.empty((num_samples, N))
+        x_new = torch.empty((num_samples, N), dtype=z.dtype)
         x_new[:, : x_fix.shape[0]] = x_fix
 
         for i in range(x_fix.size(0), last_ind):
