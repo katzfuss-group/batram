@@ -157,7 +157,7 @@ class CorModule(torch.nn.Module):
         return cm
 
 
-class SperableGP(gpytorch.models.ExactGP):
+class SeperableGP(gpytorch.models.ExactGP):
     def __init__(self, data: Data, likelihood):
         self.data = data
         train_y, train_x = data.to_long()

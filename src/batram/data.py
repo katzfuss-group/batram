@@ -3,6 +3,7 @@ from dataclasses import dataclass
 import numpy as np
 import torch
 import veccs.orderings
+import veccs.orderings2
 from veccs.utils import inverse_permutation
 
 
@@ -165,7 +166,7 @@ class Data:
         response = response[..., order]
 
         # find nearest neighbors according to L2
-        cs = veccs.orderings.find_nns_l2(locs, size_cond_sets)
+        cs = veccs.orderings2.find_prev_nearest_neighbors(locs, np.arange(locs.shape[0]), size_cond_sets)
 
         return Data.new(locs, response, cs, order)
 
@@ -329,8 +330,10 @@ class MultVarData:
         location_ids_ord = location_ids[ord]
 
         # find nearest neighbours according to L2
-        conditioning_sets = veccs.orderings.find_nns_l2(
-            locs_comb_ord, max_nn=size_cond_sets
+        conditioning_sets = veccs.orderings2.find_prev_nearest_neighbors(
+            locs_comb_ord,
+            np.arange(locs_comb_ord.shape[0]),
+            max_nn=size_cond_sets
         )
 
         # get augmented responses

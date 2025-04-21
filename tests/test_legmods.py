@@ -11,6 +11,11 @@ from batram.legacy import fit_map
 from batram.legmods import AugmentData, Data, Nugget, SimpleTM, TransportMapKernel
 
 
+def _find_nns_l2(locs, max_nn=10):
+    from veccs.orderings2 import find_prev_nearest_neighbors
+    return find_prev_nearest_neighbors(locs, np.arange(locs.shape[0]), max_nn)
+
+
 @pytest.fixture
 def simple_data() -> Data:
     test_folder = pathlib.Path(__file__).parent
@@ -23,7 +28,7 @@ def simple_data() -> Data:
     obs = torch.as_tensor(pickled_data["observations"])
 
     max_size_cs = 30
-    nn = veccs.orderings.find_nns_l2(locs, max_size_cs)
+    nn = _find_nns_l2(locs, max_size_cs)
 
     data = Data.new(
         torch.as_tensor(locs), obs, torch.as_tensor(nn), order=np.arange(locs.shape[0])
@@ -204,7 +209,7 @@ def test_optim_simNR900() -> None:
     obs = obs[:, ord]
 
     max_size_cs = 30
-    nn = veccs.orderings.find_nns_l2(locs, max_nn=max_size_cs)
+    nn = _find_nns_l2(locs, max_nn=max_size_cs)
 
     tmdata = Data.new(torch.as_tensor(locs), obs, torch.as_tensor(nn), order=ord)
     theta_init = torch.tensor(

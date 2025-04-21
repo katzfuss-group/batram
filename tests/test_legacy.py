@@ -9,6 +9,11 @@ import veccs.orderings
 import batram.legacy.fit_map as legacy
 
 
+def _find_nns_l2(locs, max_nn=10):
+    from veccs.orderings2 import find_prev_nearest_neighbors
+    return find_prev_nearest_neighbors(locs, np.arange(locs.shape[0]), max_nn)
+
+
 @pytest.mark.skip("test is numerically unstable")
 def test_legacy_intloglik() -> None:
     # this test fails on github.
@@ -31,7 +36,7 @@ def test_legacy_intloglik() -> None:
     obs = obs[:, ord]
 
     max_size_cs = 30
-    nn = veccs.orderings.find_nns_l2(locs)
+    nn = _find_nns_l2(locs)
     scal = legacy.compute_scal(locs, nn)
 
     tm = legacy.TransportMap(
@@ -65,7 +70,7 @@ def test_legacy_simple_data() -> None:
     obs = torch.as_tensor(data["observations"])
 
     max_size_cs = 30
-    nn = veccs.orderings.find_nns_l2(locs, max_size_cs)
+    nn = _find_nns_l2(locs, max_size_cs)
     scal = legacy.compute_scal(locs, nn)
 
     tm = legacy.TransportMap(
@@ -101,7 +106,7 @@ def test_legacy_cond_samp_bayes() -> None:
     obs = torch.as_tensor(data["observations"])
 
     max_size_cs = 30
-    nn = veccs.orderings.find_nns_l2(locs, max_size_cs)
+    nn = _find_nns_l2(locs, max_size_cs)
     scal = legacy.compute_scal(locs, nn)
 
     tm = legacy.TransportMap(
@@ -141,7 +146,7 @@ def test_legacy_score() -> None:
     obs = torch.as_tensor(data["observations"])
 
     max_size_cs = 30
-    nn = veccs.orderings.find_nns_l2(locs, max_size_cs)
+    nn = _find_nns_l2(locs, max_size_cs)
     scal = legacy.compute_scal(locs, nn)
 
     tm = legacy.TransportMap(
@@ -190,7 +195,7 @@ def test_legacy_fitmap() -> None:
     obs = obs[:, ord]
 
     max_size_cs = 30
-    nn = veccs.orderings.find_nns_l2(locs, max_nn=max_size_cs)
+    nn = _find_nns_l2(locs, max_nn=max_size_cs)
     scal = legacy.compute_scal(locs, nn)
 
     res, loss = legacy.fit_map_mini(

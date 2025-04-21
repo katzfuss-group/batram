@@ -3,7 +3,8 @@ from itertools import product
 import numpy as np
 import scipy.spatial.distance
 import torch
-from veccs.orderings import find_nns_l2, maxmin_cpp
+from veccs.orderings import maxmin_cpp
+from veccs.orderings2 import find_prev_nearest_neighbors
 
 from .data import Data, MultVarData
 from .utils import calc_u_d_b, cov_exponential
@@ -105,7 +106,7 @@ def sim_LR_mv(
     location_ids = np.tile(np.arange(nlocs), nproc)[ord]
 
     # determine conditioning sets
-    nn = find_nns_l2(locs_augm, max_nn=max_num_neibours)
+    nn = find_prev_nearest_neighbors(locs_augm, np.arange(locs_augm.shape[0]), max_nn=max_num_neibours)
 
     # calculate respnses
     dists = scipy.spatial.distance.cdist(locs_augm, locs_augm, metric="euclidean")

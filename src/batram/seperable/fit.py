@@ -5,13 +5,13 @@ from tqdm import tqdm
 from . import gpcov
 
 
-def fit_sperable(
+def fit_seperable(
     data: gpcov.Data,
     subsample: None | int = None,
     niters=2000,
     lr=0.1,
     silent: bool = False,
-) -> tuple[gpcov.SperableGP, gpytorch.likelihoods.GaussianLikelihood, list[float]]:
+) -> tuple[gpcov.SeperableGP, gpytorch.likelihoods.GaussianLikelihood, list[float]]:
     if subsample:
         import copy
 
@@ -24,7 +24,7 @@ def fit_sperable(
         data._loc_sp_long = None
 
     likelihood = gpytorch.likelihoods.GaussianLikelihood()
-    model = gpcov.SperableGP(data, likelihood)
+    model = gpcov.SeperableGP(data, likelihood)
     model.train()
     likelihood.train()
 
