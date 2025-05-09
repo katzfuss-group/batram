@@ -5,7 +5,7 @@ This repository hosts a Python implementation of the methodology presented in
 along with code from related research projects. For project-specific
 implementations, please refer to the corresponding branches.
 
-- [Katzfuss and Schäfer (2023)](https://doi.org/10.1080/01621459.2023.2197158): An implemplementation of the foundational methodology is provided in this branch.
+- [Katzfuss and Schäfer (2023)](https://doi.org/10.1080/01621459.2023.2197158): An implementation of the foundational methodology is provided in this branch.
 - [Wiemann and Katzfuss (2023)](https://link.springer.com/article/10.1007/s13253-023-00580-z): See branch
   [mvtm](https://github.com/katzfuss-group/batram/tree/mvtm). Wiemann and Katzfuss (2023) present a scalable Bayesian nonparametric framework that models large, multivariate, non-Gaussian spatial fields using triangular transport maps with Gaussian process components
 - [Chakraborty and Katzfuss (2024)](https://arxiv.org/pdf/2409.19208): See branch [ShrinkTM](https://github.com/katzfuss-group/batram/tree/ShrinkTM). This work introduces parametric shrinkage toward a parametric base model, enabling the use of the transport map methodology in limited data scenarios, including cases with very few -- even one -- observed spatial fields.
