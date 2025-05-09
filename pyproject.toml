@@ -25,7 +25,7 @@ dependencies = [
     "pyro-ppl >= 1.8.4",
     "tqdm >= 4.65",
     "matplotlib >= 3.7",
-    "veccs @ git+https://github.com/katzfuss-group/veccs.git@py-orderings",
+    "veccs @ git+https://github.com/katzfuss-group/veccs.git@v0.0.2",
 ]
 
 dynamic = ["version"]
