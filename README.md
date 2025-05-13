@@ -11,6 +11,7 @@ implementations, please refer to the corresponding branches.
 - [Chakraborty and Katzfuss (2024)](https://arxiv.org/pdf/2409.19208): See branch [ShrinkTM](https://github.com/katzfuss-group/batram/tree/ShrinkTM). This work introduces parametric shrinkage toward a parametric base model, enabling the use of the transport map methodology in limited data scenarios, including cases with very few -- even one -- observed spatial fields.
 - [Lei et al. (2025+)]: See repository [space_time_demo](https://github.com/katzfuss-group/space_time_demo). This repo extends the methodology to spatio-temporal fields.
 - [Drennan et al. (2025+)]: See repository [batram-cov](https://github.com/katzfuss-group/batram-cov). This repository incorporates covariate-dependent transformations within the transport map methodology, thereby allowing the modelled dependence to changes with covariate information.
+- [Hobbs et al. (2025+)]: See repository [lsm_bayes_transp]([https://github.com/katzfuss-group/batram-cov](https://github.com/esdt-uq-transport/lsm_bayes_transp). This repository implements Bayesian transport maps including marginal empirical quantile transformations in Python for output from the NCAR large ensemble.
 
 ## Installation
 
