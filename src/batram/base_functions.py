@@ -30,17 +30,21 @@ def compute_scale(
     scale = scale.div(scale[0])
     return scale
 
-def scaling_mf(locs_ord: np.ndarray | torch.Tensor, NN: np.ndarray | torch.Tensor,
-               fs: np.ndarray | torch.Tensor) -> torch.Tensor:
-    """ Computes scaling for multifidelity data. 
+
+def scaling_mf(
+    locs_ord: np.ndarray | torch.Tensor,
+    NN: np.ndarray | torch.Tensor,
+    fs: np.ndarray | torch.Tensor,
+) -> torch.Tensor:
+    """Computes scaling for multifidelity data.
 
     Args:
     -----
-    all_locs: Locations of the data in all Fidelities. Shape (N, d), 
+    all_locs: Locations of the data in all Fidelities. Shape (N, d),
     where N = N_1 + N_2 + ... + N_r
 
-    NN: Multifidelity conditioning sets. Shape (N, 2m), where m is the 
-    maximum number of neighbors of each fidelity, with -1 indicating no 
+    NN: Multifidelity conditioning sets. Shape (N, 2m), where m is the
+    maximum number of neighbors of each fidelity, with -1 indicating no
     neighbors
 
     fs: Fidelity sizes (N_1, N_2, ..., N_r)

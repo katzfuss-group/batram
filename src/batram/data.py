@@ -1,9 +1,10 @@
 from dataclasses import dataclass
 
 import torch
-import numpy as np
-from batram.legmods import AugmentedData
+
 from batram.base_functions import scaling_mf
+from batram.legmods import AugmentedData
+
 
 @dataclass
 class Data:
@@ -44,13 +45,14 @@ class Data:
         augmented_response = torch.where(ecs == -1, torch.nan, response[:, ecs])
 
         return Data(locs, response, augmented_response, conditioning_set)
-    
+
+
 @dataclass
 class MultiFidelityData:
     """Data class
 
-    Holds $n$ replicates of spatial field observed at $N$ locations. The data in
-    this class has not been normalized.
+    Holds $n$ replicates of the multi-fidelity spatial fields observed at $N$ locations.
+    The data in this class has not been normalized.
 
     Note
     ----
@@ -60,15 +62,15 @@ class MultiFidelityData:
     ----------
     locs
         Locations of the data. shape (N, d)
-    responsez
+    response
         Response of the data. Shape (n, N)
 
     augmented_response
-        Augmented response of the data. Shape (n, N, m + 1). nan indicates no
+        Augmented response of the data. Shape (n, N, 2m). nan indicates no
         conditioning.
 
     conditioning_sets
-        Conditioning sets of the data. Shape (N, m)
+        Conditioning sets of the data. Shape (N, 2m)
     """
 
     locs: torch.Tensor
@@ -84,11 +86,13 @@ class MultiFidelityData:
         nlocs = locs.shape[0]
         ecs = torch.hstack([torch.arange(nlocs).reshape(-1, 1), conditioning_set])
         augmented_response = torch.where(ecs == -1, torch.nan, response[:, ecs])
-        max_m = int((augmented_response.shape[-1] - 1)/2)
+        max_m = int((augmented_response.shape[-1] - 1) / 2)
 
-        return MultiFidelityData(locs, response, augmented_response, 
-                                 conditioning_set, fidelity_sizes, max_m)
-    
+        return MultiFidelityData(
+            locs, response, augmented_response, conditioning_set, fidelity_sizes, max_m
+        )
+
+
 class AugmentDataMF(torch.nn.Module):
     """Augments data
 
