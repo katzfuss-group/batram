@@ -1,17 +1,10 @@
 # batram
 
-This repository hosts a Python implementation of the methodology presented in
-[Katzfuss and Schäfer (2023)](https://doi.org/10.1080/01621459.2023.2197158),
-along with code from related research projects. For project-specific
-implementations, please refer to the corresponding branches.
+This branch hosts a Pyton implementation of the methodology presented in 
+[Calle-Saldarriaga et al. (2025+)]. 
 
-- [Katzfuss and Schäfer (2023)](https://doi.org/10.1080/01621459.2023.2197158): An implementation of the foundational methodology is provided in this branch.
-- [Wiemann and Katzfuss (2023)](https://link.springer.com/article/10.1007/s13253-023-00580-z): See branch
-  [mvtm](https://github.com/katzfuss-group/batram/tree/mvtm). Wiemann and Katzfuss (2023) present a scalable Bayesian nonparametric framework that models large, multivariate, non-Gaussian spatial fields using triangular transport maps with Gaussian process components
-- [Chakraborty and Katzfuss (2024)](https://arxiv.org/pdf/2409.19208): See branch [ShrinkTM](https://github.com/katzfuss-group/batram/tree/ShrinkTM). This work introduces parametric shrinkage toward a parametric base model, enabling the use of the transport map methodology in limited data scenarios, including cases with very few -- even one -- observed spatial fields.
-- [Lei et al. (2025+)]: See repository [space_time_demo](https://github.com/katzfuss-group/space_time_demo). This repo extends the methodology to spatio-temporal fields.
-- [Drennan et al. (2025+)]: See repository [batram-cov](https://github.com/katzfuss-group/batram-cov). This repository incorporates covariate-dependent transformations within the transport map methodology, thereby allowing the modelled dependence to changes with covariate information.
-- [Hobbs et al. (2025+)]: See repository [lsm_bayes_transp](https://github.com/esdt-uq-transport/lsm_bayes_transp). This repository implements Bayesian transport maps including marginal empirical quantile transformations in Python for output from the NCAR large ensemble.
+Please refer to the [main branch](https://github.com/katzfuss-group/batram) for
+related research projects.
 
 ## Installation
 
@@ -23,22 +16,9 @@ install the dependecy [veccs](https://github.com/katzfuss-group/veccs).
 
 ## Getting Started
 
-For a quick introduction to the package, see the [getting-started notebook](notebooks/getting-started.ipynb) in the `notebooks` folder. It covers
+For a quick introduction to the package, see the [getting-started notebook](notebooks/tutorial-mf.ipynb) in the `notebooks` folder. It covers
 key topics such as data preprocessing, model fitting, model evaluation, and
 posterior sampling.
-
-
-
-## How to contribute?
-
-1. install the package with the additional dependencies for development using
-   `pip install -e .[dev,docs]`
-2. before pushing on `main` or a PR, run `pre-commit run --all-files` and ensure
-   that all tests pass by running `pytest`.
-3. before pushing on `main` or merging a PR, make sure the code is well
-   documented and covered by tests.
-
-The documentenation can be viewed while editing the code using `mkdocs serve`.
 
 ## Acknowledgements
 
