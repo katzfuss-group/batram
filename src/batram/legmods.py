@@ -1,3 +1,5 @@
+from __future__ import annotations  # <-- add (top of file)
+
 import logging
 import math
 from collections.abc import Iterator
@@ -13,6 +15,8 @@ from pyro.distributions import InverseGamma
 from torch.distributions import Normal
 from torch.distributions.studentT import StudentT
 from tqdm import tqdm
+
+from batram.data import MultiFidelityData
 
 from .base_functions import compute_scale
 from .stopper import PEarlyStopper
@@ -126,6 +130,10 @@ class Data:
 
         return Data(locs, response, augmented_response, conditioning_set)
 
+    @property
+    def max_m(self) -> int:  # <-- new
+        return self.conditioning_sets.shape[-1]
+
 
 @dataclass
 class AugmentedData:
@@ -166,7 +174,7 @@ class AugmentedData:
     locs: torch.Tensor
     augmented_response: torch.Tensor
     scales: torch.Tensor
-    data: Data
+    data: Data | MultiFidelityData
 
     @property
     def response(self) -> torch.Tensor:
@@ -274,7 +282,7 @@ class TransportMapKernel(torch.nn.Module):
 
         self.fix_m = fix_m
         self.smooth = smooth
-        self._tracked_values: dict["str", torch.Tensor] = {}
+        self._tracked_values: dict[str, torch.Tensor] = {}
 
         matern = MaternKernel(smooth)
         matern._set_lengthscale(torch.tensor(1.0))
@@ -396,7 +404,7 @@ class OldTransportMapKernel(torch.nn.Module):
         self.fix_m = fix_m
         self.theta = theta
         self.smooth = smooth
-        self._tracked_values: dict["str", torch.Tensor] = {}
+        self._tracked_values: dict[str, torch.Tensor] = {}
 
     def _determin_m(self, theta, max_m) -> torch.Tensor:
         m: torch.Tensor

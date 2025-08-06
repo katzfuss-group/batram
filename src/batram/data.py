@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from typing import cast
 
 import torch
 
@@ -113,12 +114,15 @@ class AugmentDataMF(torch.nn.Module):
         # batched_data = data[batch_idx]
         scales = scaling_mf(data.locs, data.conditioning_sets, data.fidelity_sizes)
 
-        return AugmentedData(
-            data_size=data.response.shape[1],
-            batch_size=batch_idx.shape[0],
-            batch_idx=batch_idx,
-            locs=data.locs[batch_idx, :],
-            augmented_response=data.augmented_response[:, batch_idx, :],
-            scales=scales[batch_idx],
-            data=data,
+        return cast(
+            AugmentedData,  # type: ignore[arg-type]
+            AugmentedData(
+                data_size=data.response.shape[1],
+                batch_size=batch_idx.shape[0],
+                batch_idx=batch_idx,
+                locs=data.locs[batch_idx, :],
+                augmented_response=data.augmented_response[:, batch_idx, :],
+                scales=scales[batch_idx],
+                data=data,
+            ),
         )

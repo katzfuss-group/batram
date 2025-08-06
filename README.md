@@ -1,7 +1,7 @@
 # batram
 
-This branch hosts a Pyton implementation of the methodology presented in 
-[Calle-Saldarriaga et al. (2025+)]. 
+This branch hosts a Pyton implementation of the methodology presented in
+[Calle-Saldarriaga et al. (2025+)].
 
 Please refer to the [main branch](https://github.com/katzfuss-group/batram) for
 related research projects.
