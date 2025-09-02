@@ -25,7 +25,7 @@ dependencies = [
     "pyro-ppl >= 1.8.4",
     "tqdm >= 4.65",
     "matplotlib >= 3.7",
-    "veccs @ git+https://github.com/katzfuss-group/veccs.git@v0.0.2",
+    "veccs @ git+https://github.com/katzfuss-group/veccs.git@main",
 ]
 
 dynamic = ["version"]
@@ -66,4 +66,5 @@ scripts_are_modules = true
 filterwarnings = [
     # "error",
     "ignore:distutils Version classes are deprecated:DeprecationWarning",
+    "ignore:Call to deprecated function.*find_prev_nearest_neighbors:DeprecationWarning",
 ]

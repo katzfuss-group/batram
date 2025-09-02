@@ -1,8 +1,9 @@
 import logging
 import math
+from collections import defaultdict
 from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import NamedTuple, cast
+from typing import Any, NamedTuple, Protocol, cast
 
 import numpy as np
 import torch
@@ -19,6 +20,60 @@ from .legmods import AugmentedData, KernelResult
 from .stopper import PEarlyStopper
 
 
+@dataclass
+class AugmentedDataMF:
+    """Augmented data class
+
+    Holds $n$ replicates of spatial field observed at $N_1, N_2, ..., N_R$ locations.
+    The data in this class has been normalized.
+
+
+    Attributes
+    ----------
+    data_size
+        Size of the original data set
+    batch_size
+        Size of the batch
+    batch_idx
+        Index of the batch in the original data set
+    locs
+        Locations of the data. shape (N, d)
+    augmented_response
+        Augmented response of the data. Shape (n, N, m + 1)$
+    scales
+        Scales of the data. Shape (N, )
+    data
+        Original data
+
+    Notes
+    -----
+
+    m is the maximum size of the conditioning sets.
+
+    scales is called $l_i$ in the paper.
+    """
+
+    data_size: int
+    batch_size: int
+    batch_idx: torch.Tensor
+    locs: torch.Tensor
+    augmented_response: torch.Tensor
+    scales: torch.Tensor
+    data: MultiFidelityData
+
+    @property
+    def response(self) -> torch.Tensor:
+        return self.augmented_response[:, :, 0]
+
+    @property
+    def response_neighbor_values(self) -> torch.Tensor:
+        return self.augmented_response[:, :, 1:]
+
+    @property
+    def max_m(self) -> int:
+        return self.augmented_response.shape[-1] - 1
+
+
 class _PreCalcLogLikMF(NamedTuple):
     nug_sd: torch.Tensor
     alpha: torch.Tensor
@@ -26,6 +81,46 @@ class _PreCalcLogLikMF(NamedTuple):
     alpha_post: torch.Tensor
     beta_post: torch.Tensor
     y_tilde: torch.Tensor
+
+
+class HasTrackedValues(Protocol):
+    def named_tracked_values(
+        self, prefix: str = "", recurse: bool = True
+    ) -> Iterator[tuple[str, torch.Tensor]]:
+        ...
+
+
+class _ParamTracker:
+    """
+    Append-only container that records 1 scalar per parameter & epoch.
+    Uses NaN for parameters that are frozen that epoch.
+    """
+
+    def __init__(self) -> None:
+        self._hist: dict[str, list[float]] = defaultdict(list)
+
+    def push(self, module: torch.nn.Module) -> None:
+        "Call once per epoch **after** the optimiser step."
+        for name, p in module.named_parameters():
+            val = p.detach().item() if p.requires_grad else float("nan")
+            self._hist[name].append(val)
+
+    # turn lists → numpy arrays at the very end
+    def to_numpy(self) -> dict[str, np.ndarray]:
+        return {k: np.asarray(v, dtype=float) for k, v in self._hist.items()}
+
+    def push_values(self, module: HasTrackedValues) -> None:
+        """Record helper stats exposed by `named_tracked_values`."""
+        for name, tval in module.named_tracked_values():
+            self._hist[name].append(tval.detach().item())
+
+
+def as_paramlist(vector: torch.Tensor) -> torch.nn.ParameterList:
+    """
+    Turn a 1-D tensor into a ParameterList **of scalars** so each element can
+    be frozen independently simply by setting ``requires_grad``.
+    """
+    return torch.nn.ParameterList([torch.nn.Parameter(v.unsqueeze(0)) for v in vector])
 
 
 class NuggetMultiFidelity(torch.nn.Module):
@@ -38,7 +133,7 @@ class NuggetMultiFidelity(torch.nn.Module):
         super().__init__()
         # 2 nugget parameters per fidelity
         assert nugget_params.shape == (2 * R,)
-        self.nugget_params = torch.nn.Parameter(nugget_params)
+        self.nugget_params = as_paramlist(nugget_params)
         self.R = R
 
     def forward(self, data: AugmentedData, r: int) -> torch.Tensor:
@@ -49,12 +144,11 @@ class NuggetMultiFidelity(torch.nn.Module):
         start = sum(fs[:r])
         end = sum(fs[: r + 1])
         # If last fidelity the logic changes a bit
-        if r == self.R:
-            nugget_mean_now = (
-                sigma_1[r] + sigma_2[r] * data.scales[start:end].log()
-            ).exp()
-        nugget_mean_now = (sigma_1[r] + sigma_2[r] * data.scales[start:end].log()).exp()
-        # numerical statbility
+
+        nugget_mean_now = (
+            sigma_1[r].squeeze(0) + sigma_2[r].squeeze(0) * data.scales[start:end].log()
+        ).exp()
+        # numerical stability
         nugget_mean = torch.relu(nugget_mean_now.sub(1e-5)).add(1e-5)
         return nugget_mean
 
@@ -79,9 +173,9 @@ class TMKernelMF(torch.nn.Module):
         # Theta_params, R for theta_gamma param
         # 2 sigma parameters per fidelity, 1 lengthscale parameter per fidelity,
         # 4 relevance parameters per fidelity (except for the first fidelity)
-        self.sigma_params = torch.nn.Parameter(kernel_params[: 2 * R])
-        self.theta_q = torch.nn.Parameter(kernel_params[2 * R : 6 * R - 2])
-        self.lengthscale = torch.nn.Parameter(kernel_params[6 * R - 2 : 7 * R - 2])
+        self.sigma_params = as_paramlist(kernel_params[: 2 * R])
+        self.theta_q = as_paramlist(kernel_params[2 * R : 6 * R - 2])
+        self.lengthscale = as_paramlist(kernel_params[6 * R - 2 : 7 * R - 2])
         self.R = R
 
         self.fix_m = fix_m
@@ -93,11 +187,11 @@ class TMKernelMF(torch.nn.Module):
         # with lengthscale 1.0
         matern._set_lengthscale(torch.tensor(1.0))
         matern.requires_grad_(False)
-        self._kernel = matern
+        self._kernel: Any = matern
 
     def _range(self, r: int) -> torch.Tensor:
         "Computes lenghtscales of the kernel at fidelity r"
-        return self.lengthscale[r].exp()
+        return self.lengthscale[r].squeeze(0).exp()
 
     def _kernel_fun(
         self,
@@ -156,7 +250,8 @@ class TMKernelMF(torch.nn.Module):
         linear = _x1 @ _x2.mT
 
         ls = self._range(r) * math.sqrt(2 * self.smooth)
-        nonlinear = self._kernel(_x1 / ls, _x2 / ls).to_dense()
+        nonlinear_lazy = self._kernel(_x1 / ls, _x2 / ls)
+        nonlinear = cast(torch.Tensor, nonlinear_lazy.to_dense())
         out = (linear + sigmas**2 * nonlinear) / nug_mean
         return out
 
@@ -184,11 +279,11 @@ class TMKernelMF(torch.nn.Module):
         # We access different parameters depending on whether we are
         # computing scaling with respect to current fidelity or the previous one
         if preb:
-            theta_q_0 = self.theta_q[r + 2 * self.R - 1]
-            theta_q_1 = self.theta_q[r + 3 * self.R - 2]
+            theta_q_0 = self.theta_q[r + 2 * self.R - 1].squeeze(0)
+            theta_q_1 = self.theta_q[r + 3 * self.R - 2].squeeze(0)
         else:
-            theta_q_0 = self.theta_q[r]
-            theta_q_1 = self.theta_q[r + self.R]
+            theta_q_0 = self.theta_q[r].squeeze(0)
+            theta_q_1 = self.theta_q[r + self.R].squeeze(0)
         theta_q_1 = torch.exp(theta_q_1)
         scales_now = torch.exp(theta_q_0 - 0.5 * theta_q_1 * k)
         return scales_now
@@ -209,8 +304,8 @@ class TMKernelMF(torch.nn.Module):
 
     def _sigmas(self, scales: torch.Tensor, r: int) -> torch.Tensor:
         """Computes nonlinear scaling for the kernel at fidelity r"""
-        sigma_0_now = self.sigma_params[r]
-        sigma_1_now = self.sigma_params[r + self.R]
+        sigma_0_now = self.sigma_params[r].squeeze(0)
+        sigma_1_now = self.sigma_params[r + self.R].squeeze(0)
         return torch.exp(sigma_0_now + sigma_1_now * scales.log())
 
     def forward(
@@ -369,7 +464,31 @@ class MultiFidelityTM(torch.nn.Module):
         self.kernel = TMKernelMF(theta_init[int(2 * self.R) :], R=self.R, smooth=smooth)
         self.intloglik = IntLogLikMF(R=self.R, nug_mult=nug_mult)
         self._tracked_values: dict[str, torch.Tensor] = {}
+        self.param_chain: dict[str, np.ndarray] = {}
+        self.tracked_chain: dict[str, np.ndarray] = {}
         self.smooth = smooth
+
+    def _set_trainable_fidelity(self, r: int) -> None:
+        """Freeze all parameters except for the ones at fidelity r."""
+        for fid in range(self.R):
+            train = fid == r
+            # nugget parameters
+            self.nugget.nugget_params[fid].requires_grad_(train)
+            self.nugget.nugget_params[fid + self.R].requires_grad_(train)
+
+            # kernel parameters
+            self.kernel.sigma_params[fid].requires_grad_(train)
+            self.kernel.sigma_params[fid + self.R].requires_grad_(train)
+
+            self.kernel.theta_q[fid].requires_grad_(train)
+            self.kernel.theta_q[fid + self.R].requires_grad_(train)
+
+            # theta q previous fidelity, skip first
+            if fid > 0:
+                self.kernel.theta_q[fid + 2 * self.R - 1].requires_grad_(train)
+                self.kernel.theta_q[fid + 3 * self.R - 2].requires_grad_(train)
+
+            self.kernel.lengthscale[fid].requires_grad_(train)
 
     def forward(
         self,
@@ -403,6 +522,18 @@ class MultiFidelityTM(torch.nn.Module):
             recurse=recurse,
         )
         yield from gen
+
+    def chain(self, key: str, start: int = 0, stop: int | None = None) -> np.ndarray:
+        """Return a 1-D numpy view of self.param_chain[key] for [start:stop]."""
+        arr = self.param_chain[key]  # 1-D over full training (all fidelities)
+        # Make sure we have a numpy array and slice safely
+        if isinstance(arr, torch.Tensor):
+            arr = arr.detach().cpu().numpy()
+        else:
+            arr = np.asarray(arr)
+        if stop is None:
+            stop = arr.shape[0]
+        return arr[start:stop]
 
     def fit(
         self,
@@ -466,10 +597,10 @@ class MultiFidelityTM(torch.nn.Module):
 
         losses: list[float] = []
         test_losses: list[float] = []
-        parameters = []
-        values = []
+        value_tracker = _ParamTracker()
+        tracker = _ParamTracker()
         for r in range(self.R):
-            # Restart optimizer/scheduler for each fidelity
+            self._set_trainable_fidelity(r)
             optimizer = torch.optim.Adam(
                 self.parameters(), lr=init_lr, weight_decay=1e-4
             )
@@ -479,12 +610,8 @@ class MultiFidelityTM(torch.nn.Module):
             losses.append(self(r).item())
             if test_data is not None:
                 test_losses.append(self(r, data=test_data).item())
-            parameters.append(
-                {k: np.copy(v.detach().numpy()) for k, v in self.named_parameters()}
-            )
-            values.append(
-                {k: np.copy(v.detach().numpy()) for k, v in self.named_tracked_values()}
-            )
+            value_tracker.push_values(self)
+            tracker.push(self)
             for _ in (tqdm_obj := tqdm(range(num_iter), disable=silent)):
                 # create batches
                 if batch_size == data_size:
@@ -498,107 +625,12 @@ class MultiFidelityTM(torch.nn.Module):
                 # update for each batch
                 epoch_losses = np.zeros(len(idxes))
                 for j, idx in enumerate(idxes):
-                    with torch.autograd.set_detect_anomaly(True):
 
-                        def closure():
-                            optimizer.zero_grad()  # type: ignore
-                            # optimizer is not None
-                            loss = self(r, batch_idx=idx)
-                            loss.backward()
-                            # Adam has some momentums that will make some parameters
-                            # keep updating even if the training in that fidelity
-                            # is done,so I have to manually paste the final trained
-                            # parameter here. Very ugly, but it works.
-                            for fid_idx in range(r):
-                                if j != 0:
-                                    # Nugget 1
-                                    self.nugget.nugget_params.grad[fid_idx] = 0
-                                    print(optimizer.state[self.nugget.nugget_params])
-                                    optimizer.state[self.nugget.nugget_params][
-                                        "exp_avg"
-                                    ][fid_idx] = 0
-                                    optimizer.state[self.nugget.nugget_params][
-                                        "exp_avg_sq"
-                                    ][fid_idx] = 0
-
-                                    # Nugget 2
-                                    self.nugget.nugget_params.grad[fid_idx + self.R] = 0
-                                    optimizer.state[self.nugget.nugget_params][
-                                        "exp_avg"
-                                    ][fid_idx + self.R] = 0
-                                    optimizer.state[self.nugget.nugget_params][
-                                        "exp_avg_sq"
-                                    ][fid_idx + self.R] = 0
-
-                                    # Sigma 1
-                                    self.kernel.sigma_params.grad[fid_idx] = 0
-                                    optimizer.state[self.kernel.sigma_params][
-                                        "exp_avg"
-                                    ][fid_idx] = 0
-                                    optimizer.state[self.kernel.sigma_params][
-                                        "exp_avg_sq"
-                                    ][fid_idx] = 0
-
-                                    # Sigma 2
-                                    self.kernel.sigma_params.grad[fid_idx + self.R] = 0
-                                    optimizer.state[self.kernel.sigma_params][
-                                        "exp_avg"
-                                    ][fid_idx + self.R] = 0
-                                    optimizer.state[self.kernel.sigma_params][
-                                        "exp_avg_sq"
-                                    ][fid_idx + self.R] = 0
-
-                                    # Theta q 0
-                                    self.kernel.theta_q.grad[fid_idx] = 0
-                                    optimizer.state[self.kernel.theta_q]["exp_avg"][
-                                        fid_idx
-                                    ] = 0
-                                    optimizer.state[self.kernel.theta_q]["exp_avg_sq"][
-                                        fid_idx
-                                    ] = 0
-
-                                    # Theta q 1
-                                    self.kernel.theta_q.grad[fid_idx + self.R] = 0
-                                    optimizer.state[self.kernel.theta_q]["exp_avg"][
-                                        fid_idx + self.R
-                                    ] = 0
-                                    optimizer.state[self.kernel.theta_q]["exp_avg_sq"][
-                                        fid_idx + self.R
-                                    ] = 0
-
-                                    # Lengthscales
-                                    self.kernel.lengthscale.grad[fid_idx] = 0
-                                    optimizer.state[self.kernel.lengthscale]["exp_avg"][
-                                        fid_idx
-                                    ] = 0
-                                    optimizer.state[self.kernel.lengthscale][
-                                        "exp_avg_sq"
-                                    ][fid_idx] = 0
-
-                                    if fid_idx > 0:
-                                        # theta q 0 preb
-                                        self.kernel.theta_q.grad[
-                                            fid_idx + 2 * self.R - 1
-                                        ] = 0
-                                        optimizer.state[self.kernel.theta_q]["exp_avg"][
-                                            fid_idx + 2 * self.R - 1
-                                        ] = 0
-                                        optimizer.state[self.kernel.theta_q][
-                                            "exp_avg_sq"
-                                        ][fid_idx + 2 * self.R - 1] = 0
-
-                                        # Theta q 1 preb
-                                        self.kernel.theta_q.grad[
-                                            fid_idx + 3 * self.R - 2
-                                        ] = 0
-                                        optimizer.state[self.kernel.theta_q]["exp_avg"][
-                                            fid_idx + 3 * self.R - 2
-                                        ] = 0
-                                        optimizer.state[self.kernel.theta_q][
-                                            "exp_avg_sq"
-                                        ][fid_idx + 3 * self.R - 2] = 0
-
-                            return loss
+                    def closure():
+                        optimizer.zero_grad()
+                        loss = self(r, batch_idx=idx)
+                        loss.backward()
+                        return loss
 
                     # closure returns a tensor (which is needed for backprop).
                     # pytorch's type signature is wrong
@@ -615,16 +647,8 @@ class MultiFidelityTM(torch.nn.Module):
                         test_losses.append(self(r, data=test_data).item())
                     desc += f", Test Loss: {test_losses[-1]:.3f}"
 
-                # store parameters and values
-                parameters.append(
-                    {k: np.copy(v.detach().numpy()) for k, v in self.named_parameters()}
-                )
-                values.append(
-                    {
-                        k: np.copy(v.detach().numpy())
-                        for k, v in self.named_tracked_values()
-                    }
-                )
+                tracker.push(self)
+                value_tracker.push_values(self)
 
                 tqdm_obj.set_description(desc)
 
@@ -639,24 +663,25 @@ class MultiFidelityTM(torch.nn.Module):
                         # and break
                         break
 
-        param_chain = {}
-        for k in parameters[0].keys():
-            param_chain[k] = np.stack([d[k] for d in parameters], axis=0)
-
-        tracked_chain = {}
-        for k in values[0].keys():
-            tracked_chain[k] = np.stack([d[k] for d in values], axis=0)
+        param_chain = tracker.to_numpy()
+        tracked_chain = value_tracker.to_numpy()
+        self.param_chain = param_chain
+        self.tracked_chain = tracked_chain
 
         test_losses_arr = (
             None if test_losses is None else np.asarray(test_losses, dtype=float)
         )
 
+        final_snapshot = {
+            k: v.detach().cpu().numpy() for k, v in self.named_parameters()
+        }
+
         return FitResultMF(
             model=self,
             max_m=self.data.max_m,
             losses=np.array(losses),
-            parameters=parameters[-1],
             test_losses=test_losses_arr,
+            final_params=final_snapshot,
             param_chain=param_chain,
             tracked_chain=tracked_chain,
         )
@@ -825,7 +850,7 @@ class FitResultMF:
     max_m: int
     losses: np.ndarray
     test_losses: np.ndarray | None
-    parameters: dict[str, np.ndarray]
+    final_params: dict[str, np.ndarray]
     param_chain: dict[str, np.ndarray]
     tracked_chain: dict[str, np.ndarray]
 

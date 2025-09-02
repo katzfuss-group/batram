@@ -1,4 +1,4 @@
-from __future__ import annotations  # <-- add (top of file)
+from __future__ import annotations
 
 import logging
 import math
@@ -15,8 +15,6 @@ from pyro.distributions import InverseGamma
 from torch.distributions import Normal
 from torch.distributions.studentT import StudentT
 from tqdm import tqdm
-
-from batram.data import MultiFidelityData
 
 from .base_functions import compute_scale
 from .stopper import PEarlyStopper
@@ -174,7 +172,7 @@ class AugmentedData:
     locs: torch.Tensor
     augmented_response: torch.Tensor
     scales: torch.Tensor
-    data: Data | MultiFidelityData
+    data: Data
 
     @property
     def response(self) -> torch.Tensor:

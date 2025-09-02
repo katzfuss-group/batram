@@ -1,10 +1,9 @@
 from dataclasses import dataclass
-from typing import cast
 
 import torch
 
 from batram.base_functions import scaling_mf
-from batram.legmods import AugmentedData
+from batram.mf import AugmentedDataMF
 
 
 @dataclass
@@ -52,7 +51,8 @@ class Data:
 class MultiFidelityData:
     """Data class
 
-    Holds $n$ replicates of the multi-fidelity spatial fields observed at $N$ locations.
+    Holds $n$ replicates of the multi-fidelity spatial fields observed at
+    $N_1+N_2+...+N_R = N$ locations.
     The data in this class has not been normalized.
 
     Note
@@ -108,21 +108,18 @@ class AugmentDataMF(torch.nn.Module):
 
     def forward(
         self, data: MultiFidelityData, batch_idx: None | torch.Tensor = None
-    ) -> AugmentedData:
+    ) -> AugmentedDataMF:
         if batch_idx is None:
             batch_idx = torch.arange(data.response.shape[1])
         # batched_data = data[batch_idx]
         scales = scaling_mf(data.locs, data.conditioning_sets, data.fidelity_sizes)
 
-        return cast(
-            AugmentedData,  # type: ignore[arg-type]
-            AugmentedData(
-                data_size=data.response.shape[1],
-                batch_size=batch_idx.shape[0],
-                batch_idx=batch_idx,
-                locs=data.locs[batch_idx, :],
-                augmented_response=data.augmented_response[:, batch_idx, :],
-                scales=scales[batch_idx],
-                data=data,
-            ),
+        return AugmentedDataMF(
+            data_size=data.response.shape[1],
+            batch_size=batch_idx.shape[0],
+            batch_idx=batch_idx,
+            locs=data.locs[batch_idx, :],
+            augmented_response=data.augmented_response[:, batch_idx, :],
+            scales=scales[batch_idx],
+            data=data,
         )
