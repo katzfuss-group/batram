@@ -12,6 +12,7 @@ implementations, please refer to the corresponding branches.
 - [Lei et al. (2025+)]: See repository [space_time_demo](https://github.com/katzfuss-group/space_time_demo). This repo extends the methodology to spatio-temporal fields.
 - [Drennan et al. (2025+)]: See repository [batram-cov](https://github.com/katzfuss-group/batram-cov). This repository incorporates covariate-dependent transformations within the transport map methodology, thereby allowing the modelled dependence to changes with covariate information.
 - [Hobbs et al. (2025+)]: See repository [lsm_bayes_transp](https://github.com/esdt-uq-transport/lsm_bayes_transp). This repository implements Bayesian transport maps including marginal empirical quantile transformations in Python for output from the NCAR large ensemble.
+- [Calle-Saldarriaga et al. (2025+)]: See branch [mf](https://github.com/katzfuss-group/batram/tree/mf). This implements Bayesian Transport maps for multi-resolution (or multi-fidelity) spatial data. Allows for easy sampling of higher resolution fields given lower resolution fields.
 
 ## Installation
 
