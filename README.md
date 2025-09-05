@@ -46,4 +46,3 @@ The documentenation can be viewed while editing the code using `mkdocs serve`.
 An initial Python
 [implementation](https://github.com/katzfuss-group/BaTraMaSpa_py) was provided
 by [Jian Cao](https://www.uh.edu/nsm/math/people/faculty/index.php#assistantprof).
-
