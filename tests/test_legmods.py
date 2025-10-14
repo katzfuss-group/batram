@@ -17,6 +17,8 @@ from batram.legmods import (
     TransportMapKernel,
 )
 
+from . import find_nn_l2
+
 
 @pytest.fixture
 def simple_data() -> Data:
@@ -30,7 +32,7 @@ def simple_data() -> Data:
     obs = torch.as_tensor(pickled_data["observations"])
 
     max_size_cs = 30
-    nn = veccs.orderings.find_nns_l2(locs, max_size_cs)
+    nn = find_nn_l2(locs, max_size_cs)
 
     data = Data.new(torch.as_tensor(locs), obs, torch.as_tensor(nn))
     return data
@@ -281,7 +283,7 @@ def test_optim_simNR900() -> None:
     obs = obs[:, ord]
 
     max_size_cs = 30
-    nn = veccs.orderings.find_nns_l2(locs, max_nn=max_size_cs)
+    nn = find_nn_l2(locs, max_nn=max_size_cs)
 
     tmdata = Data.new(torch.as_tensor(locs), obs, torch.as_tensor(nn))
     theta_init = torch.tensor(
