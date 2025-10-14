@@ -5,6 +5,8 @@ from veccs import orderings
 
 from batram.datautils import DataLoader, Dataset, MinibatchSample
 
+from . import find_nn_l2
+
 
 @pytest.fixture
 def raw_data() -> dict:
@@ -12,7 +14,7 @@ def raw_data() -> dict:
     locs = np.random.normal(size=(100, 2))
     ordering = orderings.maxmin_cpp(locs)
     ordered_locs = locs[ordering]
-    condsets = orderings.find_nns_l2(ordered_locs, 10)
+    condsets = find_nn_l2(ordered_locs, 10)
 
     ordered_locs = torch.from_numpy(locs).float()
     condsets = torch.from_numpy(condsets).long()
@@ -54,6 +56,7 @@ def test_datautils_dataset_x_not_none(raw_data: dict) -> None:
         condsets=raw_data["condsets"],
         x=x,
     )
+    assert new_data.x is not None
     assert (new_data.x == x).all()
 
 
