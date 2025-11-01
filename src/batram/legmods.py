@@ -361,10 +361,11 @@ class TransportMapKernel(torch.nn.Module):
         nug_mean_reshaped = nug_mean.reshape(-1, 1, 1)
         sigmas = self._sigmas(data.scales).reshape(-1, 1, 1)
         k = self._kernel_fun(x, sigmas, nug_mean_reshaped)
-        eyes = torch.eye(k.shape[-1]).expand_as(k)
-        g = k + eyes
 
-        g[data.batch_idx == 0] = torch.eye(k.shape[-1])
+        eye = torch.eye(k.shape[-1], dtype=k.dtype, device=k.device)
+        g = k + eye
+
+        g[data.batch_idx == 0] = eye
         try:
             g_chol = torch.linalg.cholesky(g)
         except RuntimeError as e:
@@ -557,9 +558,9 @@ class IntLogLik(torch.nn.Module):
             - tmp_res.alpha.lgamma()
         )  # (N,)
 
-        assert (
-            loglik.isfinite().all().item()
-        ), "Log-likelihood contains non finite values."
+        assert loglik.isfinite().all().item(), (
+            "Log-likelihood contains non finite values."
+        )
 
         return loglik
 
