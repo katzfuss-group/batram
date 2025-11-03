@@ -17,6 +17,12 @@ from tqdm import tqdm
 from .base_functions import compute_scale
 from .stopper import PEarlyStopper
 
+# Memory debugging guard
+DEBUG_MEMORY = True
+if DEBUG_MEMORY:
+    from psutil import Process
+    PS = Process()
+
 
 def nug_fun(i, theta, scales):
     """Scales nugget (d) at location i."""
@@ -841,6 +847,10 @@ class SimpleTM(torch.nn.Module):
         ]
 
         for _ in (tqdm_obj := tqdm(range(num_iter), disable=silent)):
+            if DEBUG_MEMORY:
+                mem = PS.memory_info().rss / 2**20
+                print(f"Top of loop rss: {mem:.4f} MB")
+
             # create batches
             if batch_size == data_size:
                 idxes = [torch.arange(data_size)]
@@ -853,6 +863,9 @@ class SimpleTM(torch.nn.Module):
             # update for each batch
             epoch_losses = np.zeros(len(idxes))
             for j, idx in enumerate(idxes):
+                if DEBUG_MEMORY:
+                    mem = PS.memory_info().rss / 2**20
+                    print(f"Top of loop rss: {mem:.4f} MB")
 
                 def closure():
                     optimizer.zero_grad()  # type: ignore # optimizer is not None
