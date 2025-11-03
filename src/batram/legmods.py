@@ -21,7 +21,9 @@ from .stopper import PEarlyStopper
 DEBUG_MEMORY = True
 if DEBUG_MEMORY:
     from psutil import Process
+
     PS = Process()
+    FD = open("legmods-debug.log", "w")
 
 
 def nug_fun(i, theta, scales):
@@ -849,7 +851,7 @@ class SimpleTM(torch.nn.Module):
         for _ in (tqdm_obj := tqdm(range(num_iter), disable=silent)):
             if DEBUG_MEMORY:
                 mem = PS.memory_info().rss / 2**20
-                print(f"Top of loop rss: {mem:.4f} MB")
+                print(f"Top of loop rss: {mem:.4f} MB", FD)
 
             # create batches
             if batch_size == data_size:
@@ -865,7 +867,7 @@ class SimpleTM(torch.nn.Module):
             for j, idx in enumerate(idxes):
                 if DEBUG_MEMORY:
                     mem = PS.memory_info().rss / 2**20
-                    print(f"Top of loop rss: {mem:.4f} MB")
+                    print(f"Epoch {_} Batch {j}: {mem:.4f} MB", file=FD)
 
                 def closure():
                     optimizer.zero_grad()  # type: ignore # optimizer is not None
@@ -915,6 +917,9 @@ class SimpleTM(torch.nn.Module):
         tracked_chain = {}
         for k in values[0].keys():
             tracked_chain[k] = np.stack([d[k] for d in values], axis=0)
+
+        if DEBUG_MEMORY:
+            FD.close()
 
         return FitResult(
             model=self,
