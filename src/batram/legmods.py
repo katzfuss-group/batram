@@ -851,7 +851,7 @@ class SimpleTM(torch.nn.Module):
         for _ in (tqdm_obj := tqdm(range(num_iter), disable=silent)):
             if DEBUG_MEMORY:
                 mem = PS.memory_info().rss / 2**20
-                print(f"Top of loop rss: {mem:.4f} MB", FD)
+                print(f"Top of loop rss: {mem:.4f} MB", file=FD)
 
             # create batches
             if batch_size == data_size:
