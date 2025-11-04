@@ -18,12 +18,31 @@ from .base_functions import compute_scale
 from .stopper import PEarlyStopper
 
 # Memory debugging guard
-DEBUG_MEMORY = True
+DEBUG_MEMORY = False
 if DEBUG_MEMORY:
     from psutil import Process
 
+    @dataclass
+    class MemoryProfiling:
+        mem: float
+        batch_mem: float
+
+        def _get_mem_mb(self, pid: Process) -> float:
+            mem = pid.memory_info().rss
+            assert isinstance(mem, int)
+            return mem / 2**20
+
+        def update_mem(self, pid: Process):
+            mem = self._get_mem_mb(pid)
+            self.mem: float = mem
+
+        def update_batch_mem(self, pid: Process, num_batches: int):
+            mem = self._get_mem_mb(pid)
+            self.batch_mem += (mem - self.mem) / num_batches
+
     PS = Process()
-    FD = open("legmods-debug.log", "w")
+    FD = open("legmods-debug.log", "a")
+    NUM_BATCHES = 1
 
 
 def nug_fun(i, theta, scales):
@@ -687,11 +706,19 @@ class SimpleTM(torch.nn.Module):
             ).squeeze(-1)
             meanPred = y_tilde[i, :].unsqueeze(0).mul(cChol).sum(1)
             varPredNoNug = prVar - cChol.square().sum(1)
+            assert torch.all(varPredNoNug > 0), f"{varPredNoNug=}"
 
             # sample
             invGDist = InverseGamma(concentration=alpha_post[i], rate=beta_post[i])
             nugget = invGDist.sample((num_samples,))
-            uniNDist = Normal(loc=meanPred, scale=nugget.mul(1.0 + varPredNoNug).sqrt())
+            assert not scale.isnan().any(), (
+                f"Nugget is nan-valued, {nugget=}, {alpha_post[i]=}, {beta_post[i]=}"
+            )
+            scale = nugget.mul(1.0 + varPredNoNug).sqrt()
+            assert not scale.isnan().any(), (
+                f"scale is nan-valued, {nugget=}, {prVar=}, {scale=}"
+            )
+            uniNDist = Normal(loc=meanPred, scale=scale)
             x_new[:, i] = uniNDist.sample()
 
         return x_new
@@ -848,10 +875,16 @@ class SimpleTM(torch.nn.Module):
             {k: np.copy(v.detach().numpy()) for k, v in self.named_tracked_values()}
         ]
 
+        if DEBUG_MEMORY:
+            mem = MemoryProfiling(0.0, 0.0)
+            NUM_BATCHES = data_size // batch_size
+            print(f"Start {NUM_BATCHES = } prof", file=FD)
+
         for _ in (tqdm_obj := tqdm(range(num_iter), disable=silent)):
             if DEBUG_MEMORY:
-                mem = PS.memory_info().rss / 2**20
-                print(f"Top of loop rss: {mem:.4f} MB", file=FD)
+                _ = mem.update_mem(PS)
+                print(f"RSS {mem.mem:.4f}, Batch RSS {mem.batch_mem:.4f}", file=FD)
+                mem.batch_mem = 0.0
 
             # create batches
             if batch_size == data_size:
@@ -866,8 +899,7 @@ class SimpleTM(torch.nn.Module):
             epoch_losses = np.zeros(len(idxes))
             for j, idx in enumerate(idxes):
                 if DEBUG_MEMORY:
-                    mem = PS.memory_info().rss / 2**20
-                    print(f"Epoch {_} Batch {j}: {mem:.4f} MB", file=FD)
+                    _ = mem.update_batch_mem(PS, NUM_BATCHES)
 
                 def closure():
                     optimizer.zero_grad()  # type: ignore # optimizer is not None
