@@ -67,3 +67,8 @@ filterwarnings = [
     # "error",
     "ignore:distutils Version classes are deprecated:DeprecationWarning",
 ]
+
+[dependency-groups]
+dev = [
+    "pyside6>=6.10.0",
+]
