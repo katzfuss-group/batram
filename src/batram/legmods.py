@@ -784,7 +784,7 @@ class SimpleTM(torch.nn.Module):
         num_iter,
         init_lr: float,
         batch_size: None | int = None,
-        test_data: Data | None = None,
+        validation_data: Data | None = None,
         optimizer: None | torch.optim.Optimizer = None,
         scheduler: None | torch.optim.lr_scheduler.LRScheduler = None,
         stopper: None | PEarlyStopper = None,
@@ -801,8 +801,8 @@ class SimpleTM(torch.nn.Module):
             Initial learning rate. Only used if optimizer is None.
         batch_size
             Batch size for training. If None, use all data.
-        test_data
-            Data to use for testing. If None, do not test.
+        validation_data
+            Data to use for convergence monitoring. If None, do not validate.
         optimizer
             Optimizer to use. If None, use Adam.
         scheduler
@@ -825,7 +825,7 @@ class SimpleTM(torch.nn.Module):
                     optimizer, T_max=num_iter
                 )
 
-        if stopper is not None and test_data is None:
+        if stopper is not None and validation_data is None:
             raise ValueError("Cannot use stopper without test data.")
 
         if batch_size is None:
@@ -838,8 +838,8 @@ class SimpleTM(torch.nn.Module):
             )
 
         losses: list[float] = [self().item()]
-        test_losses: list[float] = (
-            [] if test_data is None else [self(data=test_data).item()]
+        validation_losses: list[float] = (
+            [] if validation_data is None else [self(data=validation_data).item()]
         )
         parameters = [
             {k: np.copy(v.detach().numpy()) for k, v in self.named_parameters()}
@@ -879,10 +879,10 @@ class SimpleTM(torch.nn.Module):
 
             desc = f"Train Loss: {losses[-1]:.3f}"
             # validate
-            if test_data is not None:
+            if validation_data is not None:
                 with torch.no_grad():
-                    test_losses.append(self(data=test_data).item())
-                desc += f", Test Loss: {test_losses[-1]:.3f}"
+                    validation_losses.append(self(data=validation_data).item())
+                desc += f", Test Loss: {validation_losses[-1]:.3f}"
 
             # store parameters and values
             parameters.append(
@@ -896,7 +896,7 @@ class SimpleTM(torch.nn.Module):
 
             if stopper is not None:
                 state = {k: v.detach().clone() for k, v in self.state_dict().items()}
-                stop = stopper.step(test_losses[-1], state)
+                stop = stopper.step(validation_losses[-1], state)
                 if stop:
                     # restore best state
                     self.load_state_dict(stopper.best_state())
@@ -916,7 +916,11 @@ class SimpleTM(torch.nn.Module):
             max_m=self.data.conditioning_sets.shape[-1],
             losses=np.array(losses),
             parameters=parameters[-1],
-            test_losses=np.array(test_losses) if test_data is not None else None,
+            # NOTE: This is left as `test_losses` for compatibility. We can
+            # modify it later if we choose to.
+            test_losses=np.array(validation_losses)
+            if validation_data is not None
+            else None,
             param_chain=param_chain,
             tracked_chain=tracked_chain,
         )
