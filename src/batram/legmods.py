@@ -793,20 +793,6 @@ class SimpleTM(torch.nn.Module):
         """
         Fit the model to the data.
 
-        NOTE: The choice of `init_lr` should be informed by the `batch_size`.
-        Starting from a batch size of 1, increasing the `batch_size` by a factor
-        k means roughly that you should increase the learning rate by the same
-        factor k to approximate the same learning rate. The reason for this is
-        that minibatching leads to multiple gradient (parameter) updates per
-        iteration of the fit method, so increasing the learning rate scales the
-        gradients proportionally. See
-
-          Goyal et al. (2017)
-          https://arxiv.org/pdf/1706.02677
-
-        for more discussion of how this applies to deep neural networks. The
-        findings from that paper apply to fitting this method also.
-
         Parameters
         ----------
         num_iter
@@ -826,6 +812,45 @@ class SimpleTM(torch.nn.Module):
             An early stopper. If None, no early stopping is used. Requires test data.
         silent
             If True, do not print progress.
+
+        NOTE: The choice of `init_lr` should be informed by the `batch_size`.
+        Starting from a batch size of 1, increasing the `batch_size` by a factor
+        k means roughly that you should increase the learning rate by the same
+        factor k to approximate the same learning rate. The reason for this is
+        that minibatching leads to multiple gradient (parameter) updates per
+        iteration of the fit method, so increasing the learning rate scales the
+        gradients proportionally. See
+
+          Goyal et al. (2017)
+          https://arxiv.org/pdf/1706.02677
+
+        for more discussion of how this applies to deep neural networks. The
+        findings from that paper apply to fitting this method also. As a
+        concrete example:
+
+        ```python
+        # Assuming a transport map tm is instantiated with data containing 1024
+        # locations. For batch size 32, this implies we can make 32 passes
+        # through the data per iteration.
+        # tm_batch = legmods.SimpleTM(...)
+        # tm_full = legmods.SimpleTM(...)
+
+        # Using a small batch size to fit
+        batch_fit = tm.fit(num_iter=100, init_lr=0.01, batch_size=32)
+
+        # Now compare with no minibatching but the learning rate scaled
+        full_fit = tm_full.fit(num_iter=100, init_lr=32*0.01, batch_size=None)
+
+        # The loss curves from these will be different because minibatching
+        # applies stochastic updates at every step. However, the resulting
+        # parameters should be similar.
+        ```
+
+        The parameter estimates will be different for these, but the amount by
+        which they were scaled should be similar. In the first case, we use 32
+        gradient updates, each with learning rate `lr`. In the second case, we
+        use one gradient update with learning rate `32 * lr`. (Note the `lr` is
+        generally changing from `init_lr` using a learning rate scheduler.
         """
 
         if optimizer is None:
