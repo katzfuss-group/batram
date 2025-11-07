@@ -220,10 +220,10 @@ def test_optim_simple(simple_data: Data) -> None:
     )
 
     tm = SimpleTM(simple_data, theta_init.clone(), False, smooth=1.5, nug_mult=4.0)
-    res = tm.fit(100, 0.3, test_data=tm.data)
+    res = tm.fit(100, 0.3, validation_data=tm.data)
 
     tm = SimpleTM(simple_data, theta_init.clone(), False, smooth=1.5, nug_mult=4.0)
-    res2 = tm.fit(100, 0.3, batch_size=50, test_data=tm.data)
+    res2 = tm.fit(100, 0.3, batch_size=50, validation_data=tm.data)
     assert res2.losses[-1] == pytest.approx(res.losses[-1], abs=1e-1)
 
 
@@ -237,8 +237,8 @@ def test_optim_no_theta_init(simple_data: Data) -> None:
     no_theta = SimpleTM(simple_data)
     use_theta = SimpleTM(simple_data, theta_init.clone())
 
-    no_theta_res = no_theta.fit(100, 0.3, test_data=no_theta.data)
-    use_theta_res = use_theta.fit(100, 0.3, test_data=use_theta.data)
+    no_theta_res = no_theta.fit(100, 0.3, validation_data=no_theta.data)
+    use_theta_res = use_theta.fit(100, 0.3, validation_data=use_theta.data)
 
     assert no_theta_res.losses[-1] == pytest.approx(use_theta_res.losses[-1], abs=1e-1)
 
@@ -299,5 +299,5 @@ def test_optim_simNR900() -> None:
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        res = tm.fit(100, 1.0, test_data=tm.data, optimizer=opt, silent=True)
+        res = tm.fit(100, 1.0, validation_data=tm.data, optimizer=opt, silent=True)
     assert res.test_losses[-1] == pytest.approx(10055.03, rel=3e-3)  # type: ignore
