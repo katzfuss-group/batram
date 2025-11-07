@@ -793,6 +793,20 @@ class SimpleTM(torch.nn.Module):
         """
         Fit the model to the data.
 
+        NOTE: The choice of `init_lr` should be informed by the `batch_size`.
+        Starting from a batch size of 1, increasing the `batch_size` by a factor
+        k means roughly that you should increase the learning rate by the same
+        factor k to approximate the same learning rate. The reason for this is
+        that minibatching leads to multiple gradient (parameter) updates per
+        iteration of the fit method, so increasing the learning rate scales the
+        gradients proportionally. See
+
+          Goyal et al. (2017)
+          https://arxiv.org/pdf/1706.02677
+
+        for more discussion of how this applies to deep neural networks. The
+        findings from that paper apply to fitting this method also.
+
         Parameters
         ----------
         num_iter
