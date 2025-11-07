@@ -17,33 +17,6 @@ from tqdm import tqdm
 from .base_functions import compute_scale
 from .stopper import PEarlyStopper
 
-# Memory debugging guard
-DEBUG_MEMORY = False
-if DEBUG_MEMORY:
-    from psutil import Process
-
-    @dataclass
-    class MemoryProfiling:
-        mem: float
-        batch_mem: float
-
-        def _get_mem_mb(self, pid: Process) -> float:
-            mem = pid.memory_info().rss
-            assert isinstance(mem, int)
-            return mem / 2**20
-
-        def update_mem(self, pid: Process):
-            mem = self._get_mem_mb(pid)
-            self.mem: float = mem
-
-        def update_batch_mem(self, pid: Process, num_batches: int):
-            mem = self._get_mem_mb(pid)
-            self.batch_mem += (mem - self.mem) / num_batches
-
-    PS = Process()
-    FD = open("legmods-debug.log", "a")
-    NUM_BATCHES = 1
-
 
 def nug_fun(i, theta, scales):
     """Scales nugget (d) at location i."""
@@ -875,17 +848,7 @@ class SimpleTM(torch.nn.Module):
             {k: np.copy(v.detach().numpy()) for k, v in self.named_tracked_values()}
         ]
 
-        if DEBUG_MEMORY:
-            mem = MemoryProfiling(0.0, 0.0)
-            NUM_BATCHES = data_size // batch_size
-            print(f"Start {NUM_BATCHES = } prof", file=FD)
-
         for _ in (tqdm_obj := tqdm(range(num_iter), disable=silent)):
-            if DEBUG_MEMORY:
-                _ = mem.update_mem(PS)
-                print(f"RSS {mem.mem:.4f}, Batch RSS {mem.batch_mem:.4f}", file=FD)
-                mem.batch_mem = 0.0
-
             # create batches
             if batch_size == data_size:
                 idxes = [torch.arange(data_size)]
@@ -898,8 +861,6 @@ class SimpleTM(torch.nn.Module):
             # update for each batch
             epoch_losses = np.zeros(len(idxes))
             for j, idx in enumerate(idxes):
-                if DEBUG_MEMORY:
-                    _ = mem.update_batch_mem(PS, NUM_BATCHES)
 
                 def closure():
                     optimizer.zero_grad()  # type: ignore # optimizer is not None
@@ -949,9 +910,6 @@ class SimpleTM(torch.nn.Module):
         tracked_chain = {}
         for k in values[0].keys():
             tracked_chain[k] = np.stack([d[k] for d in values], axis=0)
-
-        if DEBUG_MEMORY:
-            FD.close()
 
         return FitResult(
             model=self,
