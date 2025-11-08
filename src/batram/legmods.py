@@ -324,7 +324,6 @@ class TransportMapKernel(torch.nn.Module):
         return out
 
     def forward(self, data: AugmentedData, nug_mean: torch.Tensor) -> KernelResult:
-        """Computes with internalized kernel params instead of ParameterBox."""
         max_m = data.max_m
         m = self._determine_m(max_m)
         self._tracked_values["m"] = m
@@ -349,15 +348,9 @@ class TransportMapKernel(torch.nn.Module):
         try:
             g_chol = torch.linalg.cholesky(g)
         except RuntimeError as e:
-            # One contrast between the errors we return here and the ones in the
-            # other function is that here we don't know which Cholesky factor
-            # failed based on this message. It would be good to inherit the
-            # torch.linalg.LinAlgError and make a more informative error message
-            # with it.
+            # TODO: Use torch.linalg.LinAlgError to produce a better error message.
             raise RuntimeError("Failed to compute Cholesky decomposition of G.") from e
 
-        # Here we have talked about changing the response to be only the g
-        # matrices or simply the kernel. This requires further thought still.
         return KernelResult(g, g_chol, nug_mean)
 
 
@@ -404,17 +397,19 @@ class IntLogLik(torch.nn.Module):
         )
 
     def forward(self, data: AugmentedData, kernel_result: KernelResult) -> torch.Tensor:
+        """Computes the integrated log likelihood."""
         tmp_res = self.precalc(kernel_result, data.augmented_response[:, :, 0])
 
-        # integrated likelihood
         logdet = kernel_result.GChol.diagonal(dim1=-1, dim2=-2).log().sum(dim=1)  # (N,)
+
+        # Has shape (N, )
         loglik = (
             -logdet
             + tmp_res.alpha.mul(tmp_res.beta.log())
             - tmp_res.alpha_post.mul(tmp_res.beta_post.log())
             + tmp_res.alpha_post.lgamma()
             - tmp_res.alpha.lgamma()
-        )  # (N,)
+        )
 
         assert loglik.isfinite().all().item(), (
             "Log-likelihood contains non finite values."
@@ -532,10 +527,6 @@ class SimpleTM(torch.nn.Module):
         n, _ = self.data.response.shape
         nbrs = self.data.conditioning_sets
         m = nbrs.shape[1]
-        self.intloglik.nug_mult
-        smooth = self.kernel.smooth
-
-        theta = ctx.theta
         nugget_mean = ctx.kernel_result.nug_mean
         sigmas = ctx.sigmas
 
@@ -544,15 +535,14 @@ class SimpleTM(torch.nn.Module):
         #   - c11: The covariance for (y1, y1) for prediction data y1
         #   - c10: The covariance for (y1, y0)
         if i == 0:
-            # Need to handle the case with new_fields as some rectangular tensor
             c10 = torch.zeros((yn.shape[0], n))
             c11 = torch.zeros(yn.shape[0])
         else:
             ncol = min(i, m)
             y0 = self.data.response[:, nbrs[i, :ncol]]
             y1 = yn[:, nbrs[i, :ncol]].unsqueeze(1)
-            c10 = kernel_fun(y1, theta, sigmas[i], smooth, nugget_mean[i], y0)
-            c11 = kernel_fun(y1, theta, sigmas[i], smooth, nugget_mean[i])
+            c10 = self.kernel._kernel_fun(y1, sigmas[i], nugget_mean[i], y0)
+            c11 = self.kernel._kernel_fun(y1, sigmas[i], nugget_mean[i], y1)
 
             c10 = c10.squeeze(1)
             c11 = c11.squeeze((1, 2))
@@ -561,7 +551,7 @@ class SimpleTM(torch.nn.Module):
         v = torch.linalg.solve_triangular(L[i], c10.unsqueeze(-1), upper=False)
         v = v.squeeze(-1)
 
-        mean_pred = ctx.precalc_ll.y_tilde[i, :].mul(v).sum()
+        mean_pred = ctx.precalc_ll.y_tilde[i, :].unsqueeze(0).mul(v).sum(1)
         var_pred_no_nugget = c11 - torch.sum(v**2)
 
         assert torch.all(var_pred_no_nugget >= 0.0), f"{var_pred_no_nugget = }"
@@ -582,11 +572,6 @@ class SimpleTM(torch.nn.Module):
 
         In any case, this class should expose an interface.
         """
-
-        augmented_data: AugmentedData = self.augment_data(self.data, None)
-
-        ctx = self._init_ctx()
-
         _, N = self.data.response.shape
         if last_ind is None:
             last_ind = N
@@ -595,6 +580,8 @@ class SimpleTM(torch.nn.Module):
         x_new[:, : x_fix.size(0)] = x_fix.repeat(num_samples, 1)
         x_new[:, x_fix.size(0) :] = 0.0
 
+        ctx = self._init_ctx()
+
         for i in range(x_fix.size(0), last_ind):
             alpha_post = ctx.precalc_ll.alpha_post
             beta_post = ctx.precalc_ll.beta_post
@@ -602,7 +589,7 @@ class SimpleTM(torch.nn.Module):
 
             invGDist = InverseGamma(concentration=alpha_post[i], rate=beta_post[i])
             nugget = invGDist.sample((num_samples,))
-            var_pred = nugget.mul(1.0 + var_pred_no_nugget).sqrt()
+            var_pred = torch.sqrt(nugget * (1.0 + var_pred_no_nugget))
             uniNDist = Normal(loc=mean_pred, scale=var_pred)
             x_new[:, i] = uniNDist.sample()
 
@@ -637,7 +624,7 @@ class SimpleTM(torch.nn.Module):
             init_var = beta_post[i] / alpha_post[i] * (1 + var_pred_no_nugget)
             STDist = StudentT(2 * alpha_post[i])
             score[..., i] = (
-                STDist.log_prob((obs[..., i] - mean_pred) / init_var.sqrt())
+                STDist.log_prob((obs[..., i] - mean_pred) / torch.sqrt(init_var))
                 - 0.5 * init_var.log()
             )
 
