@@ -528,19 +528,34 @@ class SimpleTM(torch.nn.Module):
         else:
             ncol = min(i, m)
             y0 = self.data.response[:, nbrs[i, :ncol]]
-            y1 = yn[:, nbrs[i, :ncol]].unsqueeze(1)
+            y1 = yn[:, nbrs[i, :ncol]]
+
+            assert y0.shape == (n, ncol), f"{y0.shape=}, {n=}, {ncol=}"
+            assert y1.shape == (yn.shape[0], ncol), f"{y1.shape=}, {yn.shape=}, {ncol=}"
+
             c10 = self.kernel._kernel_fun(y1, sigmas[i], nugget_mean[i], y0)
             c11 = self.kernel._kernel_fun(y1, sigmas[i], nugget_mean[i], y1)
+            c11 = torch.diag(c11)
 
-            c10 = c10.squeeze(1)
-            c11 = c11.squeeze((1, 2))
+            assert c10.shape == (yn.shape[0], n), f"{c10.shape=}, {yn.shape[0]=}, {n=}"
+            assert c11.shape == (yn.shape[0],), f"{c11.shape=}, {yn.shape=}"
 
-        L = ctx.kernel_result.GChol
-        v = torch.linalg.solve_triangular(L[i], c10.unsqueeze(-1), upper=False)
-        v = v.squeeze(-1)
+        L = ctx.kernel_result.GChol[i]
+        assert L.shape == (n, n), f"{L.shape=}, {n=}"
+        v = torch.linalg.solve_triangular(L, c10.mT, upper=False)
+        v = v
 
-        mean_pred = ctx.precalc_ll.y_tilde[i, :].unsqueeze(0).mul(v).sum(1)
-        var_pred_no_nugget = c11 - torch.sum(v**2)
+        y_tilde = ctx.precalc_ll.y_tilde[i, :]
+        assert y_tilde.shape == (n,), f"{y_tilde.shape=}"
+        assert v.shape == (n, yn.shape[0]), f"{v.shape=}"
+
+        mean_pred = torch.sum(v.mT * y_tilde, dim=1)
+        assert mean_pred.shape == (yn.shape[0],), f"{mean_pred.shape=}"
+
+        var_pred_no_nugget = c11 - torch.sum(v**2, dim=0)
+        assert var_pred_no_nugget.shape == (yn.shape[0],), (
+            f"{var_pred_no_nugget.shape=}, {yn.shape[0]=}"
+        )
 
         assert torch.all(var_pred_no_nugget >= 0.0), f"{var_pred_no_nugget = }"
 
