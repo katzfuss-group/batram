@@ -52,6 +52,9 @@ docs = [
     "mkdocs-literate-nav>=0.6.0",
 ]
 
+[tool.basedpyright]
+typeCheckingMode = "basic"
+
 [tool.isort]
 profile = "black"
 py_version = 310
