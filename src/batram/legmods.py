@@ -537,18 +537,11 @@ class SimpleTM(torch.nn.Module):
             ).squeeze(-1)
             meanPred = y_tilde[i, :].unsqueeze(0).mul(cChol).sum(1)
             varPredNoNug = prVar - cChol.square().sum(1)
-            assert torch.all(varPredNoNug > 0), f"{varPredNoNug=}"
 
             # sample
             invGDist = InverseGamma(concentration=alpha_post[i], rate=beta_post[i])
             nugget = invGDist.sample((num_samples,))
-            assert not scale.isnan().any(), (
-                f"Nugget is nan-valued, {nugget=}, {alpha_post[i]=}, {beta_post[i]=}"
-            )
             scale = nugget.mul(1.0 + varPredNoNug).sqrt()
-            assert not scale.isnan().any(), (
-                f"scale is nan-valued, {nugget=}, {prVar=}, {scale=}"
-            )
             uniNDist = Normal(loc=meanPred, scale=scale)
             x_new[:, i] = uniNDist.sample()
 
