@@ -428,7 +428,6 @@ class _PredictionContext:
     """
 
     augmented_data: AugmentedData
-    theta: torch.Tensor
     scales: torch.Tensor
     sigmas: torch.Tensor
     kernel_result: KernelResult
@@ -497,16 +496,6 @@ class SimpleTM(torch.nn.Module):
         to use it externally ever!
         """
         augmented_data: AugmentedData = self.augment_data(self.data, None)
-
-        theta = torch.tensor(
-            [
-                *self.nugget.nugget_params.detach(),
-                self.kernel.theta_q.detach(),
-                *self.kernel.sigma_params.detach(),
-                self.kernel.lengthscale.detach(),
-            ]
-        )
-
         scales = augmented_data.scales
         sigmas = self.kernel._sigmas(scales)
         nug_mean = self.nugget(augmented_data)
@@ -515,7 +504,6 @@ class SimpleTM(torch.nn.Module):
 
         return _PredictionContext(
             augmented_data=augmented_data,
-            theta=theta,
             scales=scales,
             sigmas=sigmas,
             kernel_result=kernel_result,
