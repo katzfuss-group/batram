@@ -74,7 +74,7 @@ def test_legmods_intlik_simple_data(simple_data: Data) -> None:
     assert intlik == pytest.approx(-128.11582946777344, rel=1e-3)
 
 
-def test_legmods__intlik_mini_batch_simple_data(simple_data: Data) -> None:
+def test_legmods_intlik_mini_batch_simple_data(simple_data: Data) -> None:
     theta_init = torch.tensor(
         [simple_data.response[:, 0].square().mean().log(), 0.3, 0.0, 0.0, 0.1, -1.0]
     )
@@ -87,7 +87,7 @@ def test_legmods__intlik_mini_batch_simple_data(simple_data: Data) -> None:
     assert intlik == pytest.approx(-128.11582946777344, rel=1e-3)
 
 
-def test_legmods_cond_samp_bayes(simple_data: Data) -> None:
+def test_legmods_cond_sample_bayes(simple_data: Data) -> None:
     torch.manual_seed(0)
     theta_init = torch.tensor(
         [simple_data.response[:, 0].square().mean().log(), 0.3, 0.0, 0.0, 0.1, -1.0]
@@ -104,7 +104,7 @@ def test_legmods_cond_samp_bayes(simple_data: Data) -> None:
     assert sample_abs_sum == pytest.approx(65.3635, abs=1e-2)
 
 
-def test_legmods_cond_samp_multi_samples(simple_data: Data) -> None:
+def test_legmods_cond_sample_multi_samples(simple_data: Data) -> None:
     tm = SimpleTM(simple_data)
     with torch.no_grad():
         sample = tm.cond_sample(num_samples=10)
