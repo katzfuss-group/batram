@@ -198,7 +198,6 @@ class AugmentData(torch.nn.Module):
     ) -> AugmentedData:
         if batch_idx is None:
             batch_idx = torch.arange(data.response.shape[1])
-        # batched_data = data[batch_idx]
         scales = compute_scale(data.locs, data.conditioning_sets)
 
         return AugmentedData(
@@ -588,7 +587,6 @@ class SimpleTM(torch.nn.Module):
         scales = augmented_data.scales
         sigmas = self.kernel._sigmas(scales)
         self.intloglik.nug_mult
-        # nugMult = self.intloglik.nugMult  # not used
         smooth = self.kernel.smooth
 
         nug_mean = self.nugget(augmented_data)
