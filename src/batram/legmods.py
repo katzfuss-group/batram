@@ -219,17 +219,6 @@ class KernelResult:
     nug_mean: torch.Tensor
 
 
-# TODO: Deprecate / remove
-# The nugget and kernel refactors make this obsolete.
-class ParameterBox(torch.nn.Module):
-    def __init__(self, theta) -> None:
-        super().__init__()
-        self.theta = torch.nn.Parameter(theta)
-
-    def forward(self) -> torch.Tensor:
-        return self.theta
-
-
 class Nugget(torch.nn.Module):
     def __init__(self, nugget_params: torch.Tensor) -> None:
         super().__init__()
@@ -243,14 +232,6 @@ class Nugget(torch.nn.Module):
         return nugget_mean
 
 
-# TODO: Promote to TransportMapKernel
-# This was put in to preserve the existing test suite. We can remove the old
-# test suite once we are satisfied with this implementation. This integration
-# does not eliminate the need for the helper functions at the start of the file
-# but it is a step in that direction. (The helpers are still used in the
-# `cond_samp` and `score` methods of `SimpleTM`.) This rewrite allows us to
-# more easily extend the covariates case and simplifies how parameters are
-# managed throughout the model.
 class TransportMapKernel(torch.nn.Module):
     """A temporary class to refactor the `TransportMapKernel`.
 
@@ -379,128 +360,6 @@ class TransportMapKernel(torch.nn.Module):
         # Here we have talked about changing the response to be only the g
         # matrices or simply the kernel. This requires further thought still.
         return KernelResult(g, g_chol, nug_mean)
-
-
-# TODO: Deprecate / remove
-# This class becomes obsolete once we accept `TransportMapKernelRefactor`.
-class OldTransportMapKernel(torch.nn.Module):
-    """Initial reimplementation of the transport map kernel. To be deprecated.
-
-    Complete tests with `TransportMapKernelRefactor` and then remove from the
-    package.
-    """
-
-    def __init__(
-        self, theta: ParameterBox, smooth: float = 1.5, fix_m: int | None = None
-    ) -> None:
-        super().__init__()
-        self.fix_m = fix_m
-        self.theta = theta
-        self.smooth = smooth
-        self._tracked_values: dict["str", torch.Tensor] = {}
-
-    def _determin_m(self, theta, max_m) -> torch.Tensor:
-        m: torch.Tensor
-        if self.fix_m is None:
-            m = m_threshold(theta, max_m)
-        else:
-            m = torch.tensor(self.fix_m)
-
-        return m
-
-    def kernel_fun(self, X1, theta, sigma, smooth, nuggetMean=None, X2=None):
-        """
-        The kernel function should probably be part of the kernel. However, the
-        kernel itself does more than just evaluating the kernel, e.g.,
-        rescaling. To sample or calculate the (out of sample score), we need
-        access to the plain kernel function.
-        """
-
-        return kernel_fun(X1, theta, sigma, smooth, nuggetMean, X2)
-
-    def forward(
-        self, data: AugmentedData, nug_mean: torch.Tensor, new_method: bool = True
-    ) -> KernelResult:  # FIXME: Why is this linting with inconclusive types?
-        if new_method:
-            return self.new_forward(data, nug_mean)
-        else:
-            return self.old_forward(data, nug_mean)
-
-    def new_forward(self, data: AugmentedData, nug_mean: torch.Tensor) -> KernelResult:
-        """A drop-in, parallel replacement for the legacy kernel."""
-        theta = self.theta()
-        max_m = data.augmented_response.shape[-1] - 1
-        m = self._determin_m(theta, max_m)
-        self._tracked_values["m"] = m
-        assert m <= max_m
-
-        x = data.augmented_response[..., 1 : (m + 1)]
-        x = torch.where(torch.isnan(x), 0.0, x)
-        # Want the spatial dim in the first position for kernel computations,
-        # so data follow (..., N, n, fixed_m) instead of (..., n, N, m) as in
-        # the original kernel implementation. Doing this with an eye towards
-        # parallelism.
-        x = x.permute(-2, -3, -1)
-
-        nug_mean_reshaped = nug_mean.reshape(-1, 1, 1)
-        sigmas = sigma_fun(torch.arange(data.scales.numel()), theta, data.scales)
-        k = kernel_fun(x, theta, sigmas, self.smooth, nug_mean_reshaped)
-        eyes = torch.eye(k.shape[-1]).expand_as(k)
-        g = k + eyes
-
-        g[data.batch_idx == 0] = torch.eye(k.shape[-1])
-        try:
-            g_chol = torch.linalg.cholesky(g)
-        except RuntimeError as e:
-            # One contrast between the errors we return here and the ones in the
-            # other function is that here we don't know which Cholesky factor
-            # failed based on this message. It would be good to inherit the
-            # torch.linalg.LinAlgError and make a more informative error message
-            # with it.
-            raise RuntimeError("Failed to compute Cholesky decomposition of G.") from e
-
-        # Here we have talked about changing the response to be only the g
-        # matrices or simply the kernel. This requires further thought still.
-        return KernelResult(g, g_chol, nug_mean)
-
-    def old_forward(self, data: AugmentedData, nug_mean: torch.Tensor) -> KernelResult:
-        """Roughly equivalent to the legacy kernel ops."""
-        theta = self.theta()
-        n = data.augmented_response.shape[0]
-        N = data.batch_size
-        m = self._determin_m(theta, data.augmented_response.shape[-1] - 1)
-        self._tracked_values["m"] = m
-
-        K = torch.zeros(N, n, n)
-        G = torch.zeros(N, n, n)
-        # Prior vars
-        nugMean = nug_mean.squeeze()
-
-        # Compute G, GChol
-        for i in range(N):
-            if data.batch_idx[i] == 0:
-                G[i, :, :] = torch.eye(n)
-            else:
-                ncol = torch.minimum(data.batch_idx[i], m) + 1
-                X = data.augmented_response[:, i, 1:ncol]  # type: ignore[misc]
-
-                K[i, :, :] = self.kernel_fun(
-                    X,
-                    theta,
-                    sigma_fun(i, theta, data.scales),
-                    self.smooth,
-                    nugMean[i],
-                )  # n X n
-                G[i, :, :] = K[i, :, :] + torch.eye(n)  # n X n
-        try:
-            GChol = torch.linalg.cholesky(G)
-        except RuntimeError as e:
-            raise RuntimeError(
-                "Failed to compute Cholesky decomposition for observation "
-                f"{data.batch_idx[i]}."
-            ) from e
-
-        return KernelResult(G=G, GChol=GChol, nug_mean=nugMean)
 
 
 class _PreCalcLogLik(NamedTuple):
