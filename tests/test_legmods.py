@@ -11,9 +11,7 @@ from batram.legacy import fit_map
 from batram.legmods import (
     AugmentData,
     Data,
-    Nugget,
     SimpleTM,
-    TransportMapKernel,
 )
 
 from . import find_nn_l2
