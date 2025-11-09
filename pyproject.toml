@@ -73,6 +73,7 @@ filterwarnings = [
 
 [dependency-groups]
 dev = [
+    "ipykernel>=7.1.0",
     "pyside6>=6.10.0",
     "pytest>=8.4.2",
 ]
