@@ -419,7 +419,7 @@ class IntLogLik(torch.nn.Module):
 
 
 @dataclass
-class _PredictionContext:
+class _PredictionSamplingContex:
     """Intermediate values for predictive density computations.
 
     This is a module used inside of `SimpleTM` and is not intended for external
@@ -435,7 +435,7 @@ class _PredictionContext:
 
 
 class SimpleTM(torch.nn.Module):
-    """"""
+    """TODO: Add docs"""
 
     def __init__(
         self,
@@ -502,7 +502,7 @@ class SimpleTM(torch.nn.Module):
         kernel_result = self.kernel.forward(augmented_data, nug_mean)
         precalc_ll = self.intloglik.precalc(kernel_result, augmented_data.response)
 
-        return _PredictionContext(
+        return _PredictionSamplingContex(
             augmented_data=augmented_data,
             scales=scales,
             sigmas=sigmas,
@@ -533,7 +533,12 @@ class SimpleTM(torch.nn.Module):
             assert y0.shape == (n, ncol), f"{y0.shape=}, {n=}, {ncol=}"
             assert y1.shape == (yn.shape[0], ncol), f"{y1.shape=}, {yn.shape=}, {ncol=}"
 
+            # NOTE: Previously cStar in legacy code.
             c10 = self.kernel._kernel_fun(y1, sigmas[i], nugget_mean[i], y0)
+
+            # NOTE: Previously prVar in legacy code. We are making diagonal
+            # samples/predictions, so we take the diagonal of the covariance function
+            # derived here.
             c11 = self.kernel._kernel_fun(y1, sigmas[i], nugget_mean[i], y1)
             c11 = torch.diag(c11)
 
@@ -543,13 +548,12 @@ class SimpleTM(torch.nn.Module):
         L = ctx.kernel_result.GChol[i]
         assert L.shape == (n, n), f"{L.shape=}, {n=}"
         v = torch.linalg.solve_triangular(L, c10.mT, upper=False)
-        v = v
 
         y_tilde = ctx.precalc_ll.y_tilde[i, :]
         assert y_tilde.shape == (n,), f"{y_tilde.shape=}"
         assert v.shape == (n, yn.shape[0]), f"{v.shape=}"
 
-        mean_pred = torch.sum(v.mT * y_tilde, dim=1)
+        mean_pred = torch.sum(v * y_tilde[:, None], dim=0)
         assert mean_pred.shape == (yn.shape[0],), f"{mean_pred.shape=}"
 
         var_pred_no_nugget = c11 - torch.sum(v**2, dim=0)
@@ -599,7 +603,16 @@ class SimpleTM(torch.nn.Module):
         return x_new
 
     def score(self, obs, x_fix=torch.tensor([]), last_ind=None):
-        """TODO: Add proper docs"""
+        """TODO: Add proper docs
+
+        Parameters
+        ----------
+        obs
+            Sample fields to score. Assumes shape
+        x_fix
+            Initial learning rate. Only used if optimizer is None.
+        last_ind
+        """
 
         if isinstance(last_ind, int) and last_ind < x_fix.size(-1):
             raise ValueError("last_ind must be larger than conditioned field x_fix.")
@@ -612,24 +625,24 @@ class SimpleTM(torch.nn.Module):
             obs = obs.reshape(1, -1)
             x_fix = x_fix.reshape(1, -1)
 
-        _, N = self.data.response.shape
         if last_ind is None:
+            _, N = self.data.response.shape
             last_ind = N
 
         # loop over variables/locations
         ctx = self._init_ctx()
         score = torch.zeros_like(obs)
 
-        for i in range(x_fix.size(0), last_ind):
-            alpha_post = ctx.precalc_ll.alpha
-            beta_post = ctx.precalc_ll.beta
+        for i in range(x_fix.shape[1], last_ind):
             mean_pred, var_pred_no_nugget = self._update_posi(i, obs, ctx)
-            init_var = beta_post[i] / alpha_post[i] * (1 + var_pred_no_nugget)
-            STDist = StudentT(2 * alpha_post[i])
-            score[..., i] = (
-                STDist.log_prob((obs[..., i] - mean_pred) / torch.sqrt(init_var))
-                - 0.5 * init_var.log()
-            )
+            alpha_post = ctx.precalc_ll.alpha[i]
+            beta_post = ctx.precalc_ll.beta[i]
+
+            init_var = beta_post / alpha_post * (1 + var_pred_no_nugget)
+            z = (obs[..., i] - mean_pred) / torch.sqrt(init_var)
+            tval = StudentT(2 * alpha_post).log_prob(z)
+            score[..., i] = tval - 0.5 * init_var.log()
+            print(score[..., i])
 
         return score[..., x_fix.size(0) :].sum(-1)
 
