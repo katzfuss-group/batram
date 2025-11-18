@@ -667,7 +667,9 @@ class SimpleTM(torch.nn.Module):
 
             # print_tree(tree)
 
-        print(score[..., x_fix.size(0) :].sum(-1))
+        print("\nscore vectors\n")
+        for i in range(score.shape[-1]):
+            print(f"{i}, {score[0, i]:.6f}")
 
         return score[..., x_fix.size(0) :].sum(-1)
 
