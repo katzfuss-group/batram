@@ -660,12 +660,14 @@ class SimpleTM(torch.nn.Module):
             tree["i"] = i
             tree["mean_pred"] = mean_pred
             tree["var_pred_no_nugget"] = var_pred_no_nugget
-            tree["alpha_post"] = alpha_post
-            tree["beta_post"] = beta_post
+            # tree["alpha_post"] = alpha_post
+            # tree["beta_post"] = beta_post
             tree["init_var"] = init_var
             tree["score[i]"] = score[..., i]
 
-            print_tree(tree)
+            # print_tree(tree)
+
+        print(score[..., x_fix.size(0) :].sum(-1))
 
         return score[..., x_fix.size(0) :].sum(-1)
 
