@@ -678,6 +678,8 @@ class SimpleTM(torch.nn.Module):
         for i in range(score.shape[-1]):
             print(f"{i}, {score[0, i]:.6f}")
 
+        dbg_score = score.flatten().sum()
+        return dbg_score
         return score[..., x_fix.size(0) :].sum(-1)
 
     def fit(
