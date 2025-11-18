@@ -16,6 +16,8 @@ from batram.legmods import (
 
 from . import find_nn_l2
 
+torch.set_num_threads(1)
+
 
 @pytest.fixture
 def simple_data() -> Data:
