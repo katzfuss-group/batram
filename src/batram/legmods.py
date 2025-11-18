@@ -667,8 +667,14 @@ class SimpleTM(torch.nn.Module):
 
             # print_tree(tree)
 
-        print("\nscore vectors\n")
-        print(f"{score.dtype=},{score.shape=},{score.device=}")
+        attrs = {
+            "torch version": torch.__version__,
+            "score.dtype": score.dtype,
+            "score.shape": score.shape,
+            "score.device": score.device,
+        }
+        for k, v in attrs.items():
+            print(k, v)
         for i in range(score.shape[-1]):
             print(f"{i}, {score[0, i]:.6f}")
 
