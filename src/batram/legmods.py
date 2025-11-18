@@ -18,6 +18,13 @@ from .base_functions import compute_scale
 from .stopper import PEarlyStopper
 
 
+def print_tree(tree):
+    for k, v in tree.items():
+        vtype = type(v).__name__
+        shape = v.shape if hasattr(v, "shape") else None
+        print(f"{k}:{vtype},{shape},\n{v}\n")
+
+
 def nug_fun(i, theta, scales):
     """Scales nugget (d) at location i."""
     return torch.exp(torch.log(scales[i]).mul(theta[1]).add(theta[0]))
@@ -521,7 +528,7 @@ class SimpleTM(torch.nn.Module):
             precalc_ll=precalc_ll,
         )
 
-    def _update_posi(self, i, yn, ctx):
+    def _kriging_at_i(self, i, yn, ctx, tree=None):
         """Calc parameters of the ith density for conditional sampling and scoring."""
         n, _ = self.data.response.shape
         nbrs = self.data.conditioning_sets
@@ -536,6 +543,8 @@ class SimpleTM(torch.nn.Module):
         if i == 0:
             c10 = torch.zeros((yn.shape[0], n))
             c11 = torch.zeros(yn.shape[0])
+            y0 = None
+            y1 = None
         else:
             ncol = min(i, m)
             y0 = self.data.response[:, nbrs[i, :ncol]]
@@ -550,6 +559,14 @@ class SimpleTM(torch.nn.Module):
         y_tilde = ctx.precalc_ll.y_tilde[i, :]
         mean_pred = torch.sum(v * y_tilde[:, None], dim=0)
         var_pred_no_nugget = c11 - torch.sum(v**2, dim=0)
+
+        if tree:
+            tree["c10"] = c10
+            tree["c11"] = c11
+            tree["x"] = y0
+            tree["xpred"] = y1
+            tree["v"] = v
+            tree["y_tilde"] = y_tilde
 
         return mean_pred, var_pred_no_nugget
 
@@ -580,7 +597,7 @@ class SimpleTM(torch.nn.Module):
         for i in range(x_fix.size(0), last_ind):
             alpha_post = ctx.precalc_ll.alpha_post
             beta_post = ctx.precalc_ll.beta_post
-            mean_pred, var_pred_no_nugget = self._update_posi(i, x_new, ctx)
+            mean_pred, var_pred_no_nugget = self._kriging_at_i(i, x_new, ctx)
 
             invGDist = InverseGamma(concentration=alpha_post[i], rate=beta_post[i])
             nugget = invGDist.sample((num_samples,))
@@ -629,7 +646,9 @@ class SimpleTM(torch.nn.Module):
         score = torch.zeros_like(obs)
 
         for i in range(x_fix.shape[1], last_ind):
-            mean_pred, var_pred_no_nugget = self._update_posi(i, obs, ctx)
+            tree = {}
+
+            mean_pred, var_pred_no_nugget = self._kriging_at_i(i, obs, ctx, tree)
             alpha_post = ctx.precalc_ll.alpha_post[i]
             beta_post = ctx.precalc_ll.beta_post[i]
 
@@ -637,6 +656,16 @@ class SimpleTM(torch.nn.Module):
             z = (obs[..., i] - mean_pred) / torch.sqrt(init_var)
             tval = StudentT(2 * alpha_post).log_prob(z)
             score[..., i] = tval - 0.5 * init_var.log()
+
+            tree["i"] = i
+            tree["mean_pred"] = mean_pred
+            tree["var_pred_no_nugget"] = var_pred_no_nugget
+            tree["alpha_post"] = alpha_post
+            tree["beta_post"] = beta_post
+            tree["init_var"] = init_var
+            tree["score[i]"] = score[..., i]
+
+            print_tree(tree)
 
         return score[..., x_fix.size(0) :].sum(-1)
 
