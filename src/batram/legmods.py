@@ -670,7 +670,8 @@ class SimpleTM(torch.nn.Module):
             Learning rate scheduler to use. If None, CosineAnnealingLR
             is used with default optimizer.
         stopper
-            An early stopper. If None, no early stopping is used. Requires test data.
+            An early stopper. If None, no early stopping is used. Requires
+            validation data.
         silent
             If True, do not print progress.
 
@@ -726,7 +727,7 @@ class SimpleTM(torch.nn.Module):
                 )
 
         if stopper is not None and validation_data is None:
-            raise ValueError("Cannot use stopper without test data.")
+            raise ValueError("Cannot use stopper without validation data.")
 
         if batch_size is None:
             batch_size = self.data.response.shape[1]
@@ -782,7 +783,7 @@ class SimpleTM(torch.nn.Module):
             if validation_data is not None:
                 with torch.no_grad():
                     validation_losses.append(self(data=validation_data).item())
-                desc += f", Test Loss: {validation_losses[-1]:.3f}"
+                desc += f", Validation Loss: {validation_losses[-1]:.3f}"
 
             # store parameters and values
             parameters.append(
@@ -835,6 +836,10 @@ class FitResult:
     model: SimpleTM
     max_m: int
     losses: np.ndarray
+    # ???: Should we preserve test_loss as symbol in this table for
+    # compatibility with previous fit methods? Imports are already going to be
+    # broken due to the method renaming `test_loss`. It may be worth it to be
+    # consistent now.
     test_losses: None | np.ndarray
     parameters: dict[str, np.ndarray]
     param_chain: dict[str, np.ndarray]
@@ -857,9 +862,9 @@ class FitResult:
 
         if self.test_losses is not None:
             twin = cast(MPLAxes, ax.twinx())
-            (p2,) = twin.plot(self.test_losses, "C1", label="Test Loss", **kwargs)
+            (p2,) = twin.plot(self.test_losses, "C1", label="Validation Loss", **kwargs)
             legend_handle.append(p2)
-            twin.set_ylabel("Test Loss")
+            twin.set_ylabel("Validation Loss")
 
         if use_inset:
             end_idx = len(self.losses)
