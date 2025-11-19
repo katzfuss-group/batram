@@ -676,10 +676,8 @@ class SimpleTM(torch.nn.Module):
         for k, v in attrs.items():
             print(k, v)
         for i in range(score.shape[-1]):
-            print(f"{i}, {score[0, i]:.6f}, {score[0, i].numpy().tobytes()}")
+            print(f"{i}, {score[0, i]:.6f}, {score[0, i].numpy().tobytes().hex()}")
 
-        # dbg_score = score.flatten().sum()
-        # return dbg_score
         return score[..., x_fix.size(0) :].sum(-1)
 
     def fit(
