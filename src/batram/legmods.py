@@ -832,11 +832,9 @@ class SimpleTM(torch.nn.Module):
         return FitResult(
             model=self,
             max_m=self.data.conditioning_sets.shape[-1],
-            losses=np.array(losses),
+            train_losses=np.array(losses),
             parameters=parameters[-1],
-            # NOTE: This is left as `test_losses` for compatibility. We can
-            # modify it later if we choose to.
-            test_losses=np.array(validation_losses)
+            validation_losses=np.array(validation_losses)
             if validation_data is not None
             else None,
             param_chain=param_chain,
@@ -852,12 +850,8 @@ class FitResult:
 
     model: SimpleTM
     max_m: int
-    losses: np.ndarray
-    # ???: Should we preserve test_loss as symbol in this table for
-    # compatibility with previous fit methods? Imports are already going to be
-    # broken due to the method renaming `test_loss`. It may be worth it to be
-    # consistent now.
-    test_losses: None | np.ndarray
+    train_losses: np.ndarray
+    validation_losses: None | np.ndarray
     parameters: dict[str, np.ndarray]
     param_chain: dict[str, np.ndarray]
     tracked_chain: dict[str, np.ndarray]
@@ -874,27 +868,29 @@ class FitResult:
         if ax is None:
             _, ax = plt.subplots(1, 1)
 
-        (p1,) = ax.plot(self.losses, "C0", label="Train Loss", **kwargs)
+        (p1,) = ax.plot(self.train_losses, "C0", label="Train Loss", **kwargs)
         legend_handle = [p1]
 
-        if self.test_losses is not None:
+        if self.validation_losses is not None:
             twin = cast(MPLAxes, ax.twinx())
-            (p2,) = twin.plot(self.test_losses, "C1", label="Validation Loss", **kwargs)
+            (p2,) = twin.plot(
+                self.validation_losses, "C1", label="Validation Loss", **kwargs
+            )
             legend_handle.append(p2)
             twin.set_ylabel("Validation Loss")
 
         if use_inset:
-            end_idx = len(self.losses)
+            end_idx = len(self.train_losses)
             start_idx = int(0.8 * end_idx)
             inset_iterations = np.arange(start_idx, end_idx)
 
             inset = ax.inset_axes((0.5, 0.5, 0.45, 0.45))
-            inset.plot(inset_iterations, self.losses[start_idx:], "C0", **kwargs)
+            inset.plot(inset_iterations, self.train_losses[start_idx:], "C0", **kwargs)
 
-            if self.test_losses is not None:
+            if self.validation_losses is not None:
                 insert_twim = cast(MPLAxes, inset.twinx())
                 insert_twim.plot(
-                    inset_iterations, self.test_losses[start_idx:], "C1", **kwargs
+                    inset_iterations, self.validation_losses[start_idx:], "C1", **kwargs
                 )
 
         ax.set_xlabel("Iteration")
@@ -905,7 +901,7 @@ class FitResult:
 
     def plot_params(self, ax: plt.Axes | None = None, **kwargs) -> plt.Axes:
         if ax is None:
-            fig, ax = plt.subplots(1, 1)
+            _, ax = plt.subplots(1, 1)
 
         ax.plot(
             self.param_chain["nugget.nugget_params"],
