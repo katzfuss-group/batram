@@ -120,7 +120,7 @@ def test_legmods_score(simple_data: Data) -> None:
     with torch.no_grad():
         score = tm.score(simple_data.response[0, :])
 
-    assert score == pytest.approx(-49.6006, abs=1e-3)
+    assert score == pytest.approx(-49.6006, abs=1e-4)
 
 
 def test_legmods_score_with_xfix(simple_data: Data) -> None:
