@@ -562,7 +562,9 @@ class SimpleTM(torch.nn.Module):
 
         y_tilde = ctx.precalc_ll.y_tilde[i, :]
         mean_pred = torch.sum(v * y_tilde[:, None], dim=0)
+
         var_pred_no_nugget = c11 - torch.sum(v**2, dim=0)
+        var_pred_no_nugget = torch.clip(var_pred_no_nugget, 0.0)
 
         return mean_pred, var_pred_no_nugget
 
