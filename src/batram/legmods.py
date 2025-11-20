@@ -419,7 +419,7 @@ class IntLogLik(torch.nn.Module):
 
 
 @dataclass
-class _PredictionSamplingContex:
+class _PredictionSamplingContext:
     """Intermediate values for predictive density computations.
 
     This is a module used inside of `SimpleTM` and is not intended for external
@@ -523,7 +523,7 @@ class SimpleTM(torch.nn.Module):
         kernel_result = self.kernel.forward(augmented_data, nug_mean)
         precalc_ll = self.intloglik.precalc(kernel_result, augmented_data.response)
 
-        return _PredictionSamplingContex(
+        return _PredictionSamplingContext(
             augmented_data=augmented_data,
             theta=theta,
             scales=scales,
