@@ -642,6 +642,7 @@ class SimpleTM(torch.nn.Module):
             tval = StudentT(2 * alpha_post).log_prob(z)
             score[..., i] = tval - 0.5 * init_var.log()
 
+        return score[..., x_fix.size(-1) :].sum(-1)
 
     def fit(
         self,
