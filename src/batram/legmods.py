@@ -592,12 +592,6 @@ class SimpleTM(torch.nn.Module):
 
         return x_new
 
-    # QUESTION: Can scoring be done completely in parallel? We should know all
-    # of the data values necessary for scoring in complete parallel. We only
-    # need a for loop when we're generating samples because none of the data is
-    # initialized until we create it.
-    #
-    # ANSWER: Yes, scoring can be done in parallel!
     def score(self, obs, x_fix=torch.tensor([]), last_ind=None):
         """TODO: Add proper docs
 
