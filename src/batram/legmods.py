@@ -18,13 +18,6 @@ from .base_functions import compute_scale
 from .stopper import PEarlyStopper
 
 
-def print_tree(tree):
-    for k, v in tree.items():
-        vtype = type(v).__name__
-        shape = v.shape if hasattr(v, "shape") else None
-        print(f"{k}:{vtype},{shape},\n{v}\n")
-
-
 def nug_fun(i, theta, scales):
     """Scales nugget (d) at location i."""
     return torch.exp(torch.log(scales[i]).mul(theta[1]).add(theta[0]))
@@ -528,7 +521,7 @@ class SimpleTM(torch.nn.Module):
             precalc_ll=precalc_ll,
         )
 
-    def _kriging_at_i(self, i, yn, ctx, tree=None):
+    def _kriging_at_i(self, i, yn, ctx):
         """Calc parameters of the ith density for conditional sampling and scoring."""
         n, _ = self.data.response.shape
         nbrs = self.data.conditioning_sets
@@ -559,14 +552,6 @@ class SimpleTM(torch.nn.Module):
         y_tilde = ctx.precalc_ll.y_tilde[i, :]
         mean_pred = torch.sum(v * y_tilde[:, None], dim=0)
         var_pred_no_nugget = c11 - torch.sum(v**2, dim=0)
-
-        if tree:
-            tree["c10"] = c10
-            tree["c11"] = c11
-            tree["x"] = y0
-            tree["xpred"] = y1
-            tree["v"] = v
-            tree["y_tilde"] = y_tilde
 
         return mean_pred, var_pred_no_nugget
 
@@ -646,9 +631,7 @@ class SimpleTM(torch.nn.Module):
         score = torch.zeros_like(obs)
 
         for i in range(x_fix.shape[1], last_ind):
-            tree = {}
-
-            mean_pred, var_pred_no_nugget = self._kriging_at_i(i, obs, ctx, tree)
+            mean_pred, var_pred_no_nugget = self._kriging_at_i(i, obs, ctx)
             alpha_post = ctx.precalc_ll.alpha_post[i]
             beta_post = ctx.precalc_ll.beta_post[i]
 
@@ -657,28 +640,6 @@ class SimpleTM(torch.nn.Module):
             tval = StudentT(2 * alpha_post).log_prob(z)
             score[..., i] = tval - 0.5 * init_var.log()
 
-            tree["i"] = i
-            tree["mean_pred"] = mean_pred
-            tree["var_pred_no_nugget"] = var_pred_no_nugget
-            # tree["alpha_post"] = alpha_post
-            # tree["beta_post"] = beta_post
-            tree["init_var"] = init_var
-            tree["score[i]"] = score[..., i]
-
-            # print_tree(tree)
-
-        attrs = {
-            "torch version": torch.__version__,
-            "score.dtype": score.dtype,
-            "score.shape": score.shape,
-            "score.device": score.device,
-        }
-        for k, v in attrs.items():
-            print(k, v)
-        for i in range(score.shape[-1]):
-            print(f"{i}, {score[0, i]:.6f}, {score[0, i].numpy().tobytes().hex()}")
-
-        return score[..., x_fix.size(0) :].sum(-1)
 
     def fit(
         self,
