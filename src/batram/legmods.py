@@ -593,19 +593,27 @@ class SimpleTM(torch.nn.Module):
         return x_new
 
     def score(self, obs, x_fix=torch.tensor([]), last_ind=None):
-        """TODO: Add proper docs
+        """Computes the log probability of a new field `obs`.
 
         Parameters
         ----------
         obs
-            Sample fields to score. Assumes shape
+            New sample fields to compute logprobs for. These are expected to use
+            the same preprocessing as the training data, and can have shape
+            [new_fields, num_locs].
         x_fix
-            Initial learning rate. Only used if optimizer is None.
+            Fixed values to condition on. This allows conditioning on the first
+            few values of a field.
         last_ind
-            The last index to calculate scores up to (typically less than the
-            size of the field being scored). This is useful for doing quick
-            summaries such as checking the first 30 values of the field instead
-            of scoring all N values.
+            The last index to calculate scores up to (less than the size of the
+            field being scored). This is useful for doing quick summaries such
+            as checking the first 30 values of the field instead of scoring all
+            N values.
+
+        Return
+        ------
+        log_prob
+            The log probabilities (scores) for the new fields.
         """
 
         if isinstance(last_ind, int) and last_ind < x_fix.size(-1):
