@@ -436,7 +436,18 @@ class _PredictionSamplingContex:
 
 
 class SimpleTM(torch.nn.Module):
-    """TODO: Add docs"""
+    """Implements the model described in [1].
+
+    See a quickstart intro to using this model in
+
+        https://github.com/katzfuss-group/batram/blob/main/notebooks/getting-started.ipynb
+
+    References
+    ----------
+    [1] Katzfuss and Schafer (2024, _JASA_). Scalable Bayesian Transport Maps
+        for high-dimensional non-Gaussian spatial fields.
+        https://doi.org/10.1080/01621459.2023.2197158
+    """
 
     def __init__(
         self,
