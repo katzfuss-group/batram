@@ -102,8 +102,8 @@ def test_legmods_cond_samp_bayes(simple_data: Data) -> None:
         sample_abs_sum = sample.abs().sum()
 
     # NOTE: This is just a fingerprint. It can change if the implementation
-  # changes. It can also change if the data (from the `simple_data` fixture) or
-  # RNG changes.
+    # changes. It can also change if the data (from the `simple_data` fixture) or
+    # RNG changes.
     assert sample_abs_sum == pytest.approx(57.7792)
 
 
