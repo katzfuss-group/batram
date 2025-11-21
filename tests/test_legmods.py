@@ -194,7 +194,9 @@ def test_optim_no_theta_init(simple_data: Data) -> None:
     no_theta_res = no_theta.fit(100, 0.3, validation_data=no_theta.data)
     use_theta_res = use_theta.fit(100, 0.3, validation_data=use_theta.data)
 
-    assert no_theta_res.train_losses[-1] == pytest.approx(use_theta_res.train_losses[-1], abs=1e-1)
+    assert no_theta_res.train_losses[-1] == pytest.approx(
+        use_theta_res.train_losses[-1], abs=1e-1
+    )
 
 
 def test_init(simple_data) -> None:
