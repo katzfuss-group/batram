@@ -1,8 +1,9 @@
 import logging
 import math
+import warnings
 from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import NamedTuple, cast
+from typing import Any, NamedTuple, cast
 
 import numpy as np
 import torch
@@ -10,12 +11,14 @@ from gpytorch.kernels import MaternKernel
 from matplotlib import pyplot as plt
 from matplotlib.axes import Axes as MPLAxes
 from pyro.distributions import InverseGamma
+from scipy import stats
 from torch.distributions import Normal
-from torch.distributions.studentT import StudentT
 from tqdm import tqdm
 
 from .base_functions import compute_scale
 from .stopper import PEarlyStopper
+
+Array = Any
 
 
 def nug_fun(i, theta, scales):
@@ -47,6 +50,29 @@ def con_fun(i, theta, scales):
     return torch.exp(torch.log(scales[i]).mul(theta[9]).add(theta[8]))
 
 
+def t_score_to_z_score_hill(x, df):
+    """
+    Implements the following transformation as a numerically more stable approximation::
+
+        normal_dist.quantile(t_dist.cdf(x))
+
+    See:
+
+    Hill, G. W. (1970). Algorithm 396: Student's t-quantiles.
+    Communications of the ACM, 13(10), 619-620.
+    """
+
+    A = df - 0.5
+    B = 48 * A * A
+    z = A * torch.log1p((x / df) * x)
+    z = (
+        ((((-0.4 * z - 3.3) * z - 24) * z - 85.5) / (0.8 * z * z + 100 + B) + z + 3) / B
+        + 1
+    ) * torch.sqrt(z)
+
+    return z * torch.sign(x)
+
+
 def m_threshold(theta, m_max) -> torch.Tensor:
     """Determines a threshold for m nearest neighbors."""
     rng = torch.arange(m_max + 1) + 1
@@ -60,7 +86,7 @@ def m_threshold(theta, m_max) -> torch.Tensor:
     if m > m_max:
         logging.warning(
             f"Required size of the conditioning sets m = {m.item()} is greater than "
-            f"the maximum number of neighbors {m_max = } in the pre-calculated "
+            f"the maximum number of neighbors {m_max=} in the pre-calculated "
             "conditioning sets."
         )
         m = torch.tensor(m_max)
@@ -308,7 +334,7 @@ class TransportMapKernel(torch.nn.Module):
         if m > max_m:
             logging.warning(
                 f"Required size of the conditioning sets m = {m.item()} is "
-                f"greater than the maximum number of neighbors {max_m = } in "
+                f"greater than the maximum number of neighbors {max_m=} in "
                 "the pre-calculated conditioning sets."
             )
             m = torch.tensor(max_m)
@@ -364,7 +390,7 @@ class TransportMapKernel(torch.nn.Module):
         eyes = torch.eye(k.shape[-1]).expand_as(k)
         g = k + eyes
 
-        g[data.batch_idx == 0] = torch.eye(k.shape[-1])
+        g[data.batch_idx == 0] = torch.eye(k.shape[-1], dtype=g.dtype)
         try:
             g_chol = torch.linalg.cholesky(g)
         except RuntimeError as e:
@@ -626,13 +652,40 @@ class SimpleTM(torch.nn.Module):
         num_samples: int = 1,
     ):
         """
-        I'm not sure where this should exactly be implemented.
-
-        I guess, best ist in the likelihood nn.Module but it needs access to the
-        kernel module as well.
-
-        In any case, this class should expose an interface.
+        Draws random samples from the transport map distribution, possibly
+        conditioned on a number of fixed observations.
         """
+        data = self.data.response
+        N = data.shape[1]
+        z = Normal(loc=0.0, scale=1.0).sample((num_samples, N))
+
+        return self.inverse_map(z, x_fix=x_fix, last_ind=last_ind, sample_nugget=True)
+
+    def inverse_map(
+        self,
+        z,
+        x_fix=torch.tensor([]),
+        last_ind: int | None = None,
+        sample_nugget: bool = False,
+    ):
+        """
+        Inverse of the transport map.
+
+        If ``sample_nugget=True``, the nugget will be drawn from an InverseGamma
+        distribution with parameters ``alpha_post[i]`` and ``beta_post[i]`` for each
+        location.
+
+        If ``sample_nugget=False``, the nugget will be set to its posterior expectation
+        ``beta_post[i] / alpha_post[i]``.
+        """
+
+        if last_ind is not None and last_ind < x_fix.size(-1):
+            raise ValueError("last_ind must be larger than conditioned field 'fixed'.")
+
+        if not len(x_fix.size()) == 1:
+            raise ValueError("'fixed' must be a 1d tensor.")
+
+        num_samples = z.shape[0] if len(z.shape) > 1 else 1
 
         augmented_data: AugmentedData = self.augment_data(self.data, None)
 
@@ -652,17 +705,31 @@ class SimpleTM(torch.nn.Module):
         alpha_post = tmp_res.alpha_post
         n, N = data.shape
         m = NN.shape[1]
+        # loop over variables/locations
+
         if last_ind is None:
             last_ind = N
-        # loop over variables/locations
-        x_new = torch.empty((num_samples, N))
-        x_new[:, : x_fix.size(0)] = x_fix.repeat(num_samples, 1)
-        x_new[:, x_fix.size(0) :] = 0.0
+
+        x_new = torch.empty((num_samples, N), dtype=z.dtype)
+        x_new[:, : x_fix.shape[0]] = x_fix
+
         for i in range(x_fix.size(0), last_ind):
             # predictive distribution for current sample
             if i == 0:
                 cStar = torch.zeros((num_samples, n))
                 prVar = torch.zeros((num_samples,))
+                cChol = torch.linalg.solve_triangular(
+                    chol[i, :, :], cStar.unsqueeze(-1), upper=False
+                ).squeeze(-1)
+                meanPred = torch.zeros(1)
+                varPredNoNug = torch.zeros(1)
+
+                initVar = beta_post[i] / alpha_post[i] * (1 + varPredNoNug)
+                tval = stats.t.ppf(
+                    stats.norm.cdf(z[..., i].numpy()), df=2 * alpha_post[i].numpy()
+                )
+                x_new[:, i] = meanPred + initVar.sqrt() * torch.from_numpy(tval)
+
             else:
                 ncol = min(i, m)
                 X = data[:, NN[i, :ncol]]
@@ -673,102 +740,33 @@ class SimpleTM(torch.nn.Module):
                 prVar = self.kernel._kernel_fun(
                     XPred, sigmas[i], nugget_mean[i]
                 ).squeeze((1, 2))
-            cChol = torch.linalg.solve_triangular(
-                chol[i, :, :], cStar.unsqueeze(-1), upper=False
-            ).squeeze(-1)
-            meanPred = y_tilde[i, :].unsqueeze(0).mul(cChol).sum(1)
-            varPredNoNug = prVar - cChol.square().sum(1)
+                cChol = torch.linalg.solve_triangular(
+                    chol[i, :, :], cStar.unsqueeze(-1), upper=False
+                ).squeeze(-1)
 
-            # sample
-            invGDist = InverseGamma(concentration=alpha_post[i], rate=beta_post[i])
-            nugget = invGDist.sample((num_samples,))
-            uniNDist = Normal(loc=meanPred, scale=nugget.mul(1.0 + varPredNoNug).sqrt())
-            x_new[:, i] = uniNDist.sample()
+                meanPred = y_tilde[i, :].unsqueeze(0).mul(cChol).sum(1)
+                varPredNoNug = prVar - cChol.square().sum(1)
+
+                if torch.any(varPredNoNug < 0.0):
+                    warnings.warn("Negative v(y_1:i-1) clipped to zero.")
+                    varPredNoNug = torch.clip(varPredNoNug, 0.0)
+
+                if sample_nugget:
+                    invGDist = InverseGamma(
+                        concentration=alpha_post[i], rate=beta_post[i]
+                    )
+                    nugget = invGDist.sample((num_samples,))
+                else:
+                    nugget = beta_post[i] / alpha_post[i]
+
+                initVar = nugget.mul(1 + varPredNoNug)
+
+                pnorm = stats.norm.cdf(z[..., i].numpy())
+                zt = stats.t.ppf(pnorm, df=2 * alpha_post[i].numpy())
+
+                x_new[:, i] = meanPred + initVar.sqrt() * torch.from_numpy(zt)
 
         return x_new
-
-    def score(self, obs, x_fix=torch.tensor([]), last_ind=None):
-        """
-        I'm not sure where this should exactly be implemented.
-
-        I guess, best ist in the likelihood nn.Module but it needs access to the
-        kernel module as well.
-
-        In any case, this class should expose an interface.
-
-        Also, this function shares a lot of code with cond sample. that should
-        be refactored
-        """
-
-        if isinstance(last_ind, int) and last_ind < x_fix.size(-1):
-            raise ValueError("last_ind must be larger than conditioned field x_fix.")
-
-        augmented_data: AugmentedData = self.augment_data(self.data, None)
-
-        data = self.data.response
-        NN = self.data.conditioning_sets
-        # response = augmented_data.response
-        # response_neighbor_values = augmented_data.response_neighbor_values
-        theta = torch.tensor(
-            [
-                *self.nugget.nugget_params.detach(),
-                self.kernel.theta_q.detach(),
-                *self.kernel.sigma_params.detach(),
-                self.kernel.lengthscale.detach(),
-            ]
-        )
-        scales = augmented_data.scales
-        sigmas = self.kernel._sigmas(scales)
-        self.intloglik.nug_mult
-        # nugMult = self.intloglik.nugMult  # not used
-        smooth = self.kernel.smooth
-
-        nug_mean = self.nugget(augmented_data)
-        kernel_result = self.kernel.forward(augmented_data, nug_mean)
-        nugget_mean = kernel_result.nug_mean
-        chol = kernel_result.GChol
-        tmp_res = self.intloglik.precalc(kernel_result, augmented_data.response)
-        y_tilde = tmp_res.y_tilde
-        beta_post = tmp_res.beta_post
-        alpha_post = tmp_res.alpha_post
-        n, N = data.shape
-        m = NN.shape[1]
-        if last_ind is None:
-            last_ind = N
-        # loop over variables/locations
-        score = torch.zeros(N)
-        for i in range(x_fix.size(0), last_ind):
-            # predictive distribution for current sample
-            if i == 0:
-                cStar = torch.zeros(n)
-                prVar = torch.tensor(0.0)
-            else:
-                ncol = min(i, m)
-                X = data[:, NN[i, :ncol]]
-                XPred = obs[NN[i, :ncol]].unsqueeze(
-                    0
-                )  # this line is different than in cond_sampl
-                cStar = kernel_fun(
-                    XPred, theta, sigmas[i], smooth, nugget_mean[i], X
-                ).squeeze()
-                prVar = kernel_fun(
-                    XPred, theta, sigmas[i], smooth, nugget_mean[i]
-                ).squeeze()
-            cChol = torch.linalg.solve_triangular(
-                chol[i, :, :], cStar.unsqueeze(1), upper=False
-            ).squeeze()
-            meanPred = y_tilde[i, :].mul(cChol).sum()
-            varPredNoNug = prVar - cChol.square().sum()
-
-            # score
-            initVar = beta_post[i] / alpha_post[i] * (1 + varPredNoNug)
-            STDist = StudentT(2 * alpha_post[i])
-            score[i] = (
-                STDist.log_prob((obs[i] - meanPred) / initVar.sqrt())
-                - 0.5 * initVar.log()
-            )
-
-        return score[x_fix.size(0) :].sum()
 
     def fit(
         self,
@@ -778,6 +776,7 @@ class SimpleTM(torch.nn.Module):
         test_data: Data | None = None,
         optimizer: None | torch.optim.Optimizer = None,
         scheduler: None | torch.optim.lr_scheduler.LRScheduler = None,
+        eta_min: float = 0.0,
         stopper: None | PEarlyStopper = None,
         silent: bool = False,
     ):
@@ -813,7 +812,7 @@ class SimpleTM(torch.nn.Module):
             optimizer = torch.optim.Adam(self.parameters(), lr=init_lr)
             if scheduler is None:
                 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-                    optimizer, T_max=num_iter
+                    optimizer, T_max=num_iter, eta_min=eta_min
                 )
 
         if stopper is not None and test_data is None:
@@ -829,6 +828,7 @@ class SimpleTM(torch.nn.Module):
             )
 
         losses: list[float] = [self().item()]
+
         test_losses: list[float] = (
             [] if test_data is None else [self(data=test_data).item()]
         )
@@ -911,6 +911,109 @@ class SimpleTM(torch.nn.Module):
             param_chain=param_chain,
             tracked_chain=tracked_chain,
         )
+
+    def map_and_logdet(self, obs, last_ind=None):
+        """
+        Evaluates the transport map and its log determinant.
+        """
+        augmented_data: AugmentedData = self.augment_data(self.data, None)
+
+        data = self.data.response
+        NN = self.data.conditioning_sets
+        scales = augmented_data.scales
+        sigmas = self.kernel._sigmas(scales)
+
+        nug_mean = self.nugget(augmented_data)
+        kernel_result = self.kernel.forward(augmented_data, nug_mean)
+        nugget_mean = kernel_result.nug_mean
+        chol = kernel_result.GChol
+
+        tmp_res = self.intloglik.precalc(kernel_result, augmented_data.response)
+
+        y_tilde = tmp_res.y_tilde
+        beta_post = tmp_res.beta_post
+        alpha_post = tmp_res.alpha_post
+
+        n, N = data.shape
+        if obs.dim() == 1:
+            obs = obs.unsqueeze(0)
+        torch.atleast_2d(obs)
+        n_input = obs.size(0)
+
+        m = NN.shape[1]
+
+        if last_ind is None:
+            last_ind = N
+
+        # loop over variables/locations
+        z = torch.full((n_input, N), fill_value=torch.nan)
+        z_logdet = torch.full((n_input, N), fill_value=torch.nan)
+
+        for i in range(last_ind):
+            # predictive distribution for current sample
+            if i == 0:
+                cStar = torch.zeros((n_input, n))
+                prVar = torch.zeros((n_input,))
+
+            else:
+                ncol = min(i, m)
+                X = data[:, NN[i, :ncol]]
+                XPred = obs[:, NN[i, :ncol]].unsqueeze(1)
+                cStar = self.kernel._kernel_fun(
+                    XPred, sigmas[i], nugget_mean[i], X
+                ).squeeze(1)
+                prVar = self.kernel._kernel_fun(
+                    XPred, sigmas[i], nugget_mean[i]
+                ).squeeze((1, 2))
+
+            cChol = torch.linalg.solve_triangular(
+                chol[i, :, :], cStar.unsqueeze(-1), upper=False
+            ).squeeze(-1)
+
+            meanPred = y_tilde[i, :].unsqueeze(0).mul(cChol).sum(1)
+
+            varPredNoNug = prVar - cChol.square().sum(1)
+
+            if torch.any(varPredNoNug < 0.0):
+                warnings.warn("Negative v(y_1:i-1) clipped to zero.")
+                varPredNoNug = torch.clip(varPredNoNug, 0.0)
+
+            # score
+            initVar = beta_post[i] / alpha_post[i] * (1 + varPredNoNug)
+
+            z_tilde = (obs[:, i] - meanPred) / initVar.sqrt()
+
+            # numerically stable approximation
+            z[..., i] = t_score_to_z_score_hill(z_tilde, df=2 * alpha_post[i])
+
+            z_logdet[:, i] = (
+                -0.5 * initVar.log()
+                + torch.distributions.StudentT(df=2 * alpha_post[i]).log_prob(z_tilde)
+                - torch.distributions.Normal(loc=0.0, scale=1.0).log_prob(z[:, i])
+            )
+
+        return z, z_logdet
+
+    def log_prob_contributions(self, obs, x_fix=torch.tensor([]), last_ind=None):
+        """
+        Log density contributions for all locations.
+        """
+        if isinstance(last_ind, int) and last_ind < x_fix.size(-1):
+            raise ValueError("last_ind must be larger than conditioned field x_fix.")
+        z, z_logdet = self.map_and_logdet(obs, last_ind=last_ind)
+
+        n_fixed = x_fix.size(0)
+        norm = torch.distributions.Normal(loc=0.0, scale=1.0)
+        return norm.log_prob(z[..., n_fixed:last_ind]) + z_logdet[..., n_fixed:last_ind]
+
+    def score(self, obs, x_fix=torch.tensor([]), last_ind=None):
+        """
+        Joint log density.
+        """
+        lp_contrib = self.log_prob_contributions(
+            obs=obs, x_fix=x_fix, last_ind=last_ind
+        )
+        return lp_contrib.sum(axis=-1)
 
 
 @dataclass
