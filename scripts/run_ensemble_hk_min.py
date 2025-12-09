@@ -1,18 +1,19 @@
-import gpytorch
-import torch
-from tqdm import tqdm
-from gpytorch.likelihoods import GaussianLikelihood
-from gpytorch.distributions.multivariate_normal import MultivariateNormal
-import pandas as pd
-
-import numpy as np
-from scipy.spatial.distance import cdist
-from pathlib import Path
+import math
 import pickle
+from pathlib import Path
+
+import gpytorch
+import numpy as np
+import pandas as pd
+import torch
+from gpytorch.distributions.multivariate_normal import MultivariateNormal
+from gpytorch.likelihoods import GaussianLikelihood
+from tqdm import tqdm
+
 
 class GPMatern(gpytorch.models.ExactGP):
     def __init__(self, train_x, train_y, likelihood):
-        super(GPMatern, self).__init__(train_x, train_y, likelihood)
+        super().__init__(train_x, train_y, likelihood)
         self.mean_module = gpytorch.means.ZeroMean()
         self.covar_module = self.covar_sp_module = gpytorch.kernels.ScaleKernel(
             gpytorch.kernels.MaternKernel(nu=0.5)
@@ -22,8 +23,7 @@ class GPMatern(gpytorch.models.ExactGP):
         mean_x = self.mean_module(x)
         covar_x = self.covar_module(x)
         return gpytorch.distributions.MultivariateNormal(mean_x, covar_x)
-    
-import math
+
 
 class EarlyStopper2:
     def __init__(self, min_diff: float, patients: int, min_steps: int = 0):
@@ -56,16 +56,15 @@ class EarlyStopper2:
 
 
 def get_logscore(n, data_pkl, data_pkl_min):
-
     left_out_hf = []
     for j in range(10):
         for i in range(10):
-            left_out_hf.append(int(90*j + 3*i))
+            left_out_hf.append(int(90 * j + 3 * i))
 
     left_out_mf = []
     for j in range(5):
         for i in range(5):
-            left_out_mf.append(int(20*j + 2*i))
+            left_out_mf.append(int(20 * j + 2 * i))
 
     locs_lf = data_pkl["locs_lf"]
     locs_mf = data_pkl["locs_mf"]
@@ -96,8 +95,8 @@ def get_logscore(n, data_pkl, data_pkl_min):
     n_ensemble = n
     niters = 1000
     silent = False
-    train_lf = obs_train_lf[0:n_ensemble,:]
-    mean =  train_lf.mean(axis=0)
+    train_lf = obs_train_lf[0:n_ensemble, :]
+    mean = train_lf.mean(axis=0)
     test_lf = obs_test_lf - mean
     train_lf = train_lf - train_lf.mean(axis=0)
 
@@ -145,8 +144,7 @@ def get_logscore(n, data_pkl, data_pkl_min):
         optimizer.step()
         scheduler.step()
 
-    obs_mf = obs_train_mf[0:n_ensemble,:]
-    mean_mf =  obs_mf.mean(axis=0)
+    obs_mf = obs_train_mf[0:n_ensemble, :]
     test_mf = obs_test_mf
     train_mf = obs_mf
 
@@ -156,23 +154,25 @@ def get_logscore(n, data_pkl, data_pkl_min):
         model_lf_eval = likelihood_lf(model_lf(locs_mf))
         y_hat_lf = model_lf_eval.loc
         F = y_hat_lf.reshape(-1, 1)
-        Y = train_mf.T                     # (N,n_train)
+        Y = train_mf.T  # (N,n_train)
 
-        R_op = model_lf.covar_module(locs_mf)/torch.exp(model_lf.covar_module.base_kernel.raw_lengthscale)    # Lazy SKI operator (N×N)
+        R_op = model_lf.covar_module(locs_mf) / torch.exp(
+            model_lf.covar_module.base_kernel.raw_lengthscale
+        )  # Lazy SKI operator (N×N)
 
-        RinvF = R_op.solve(F)               # O(N log N)   no huge mat
-        RinvY = R_op.solve(Y)               # batched solve
+        RinvF = R_op.solve(F)  # O(N log N)   no huge mat
+        RinvY = R_op.solve(Y)  # batched solve
 
-        FtRinvF  = (F * RinvF).sum()        # scalar
+        FtRinvF = (F * RinvF).sum()  # scalar
         beta_all = (F.T @ RinvY) / FtRinvF  # (1, n_train)
 
-        train_mf      = (Y - F @ beta_all).T  # (n_train, N)
+        train_mf = (Y - F @ beta_all).T  # (n_train, N)
 
         # test set
-        Y_test        = test_mf.T
-        RinvY_test    = R_op.solve(Y_test)
-        beta_test     = (F.T @ RinvY_test) / FtRinvF
-        test_mf       = (Y_test - F @ beta_test).T
+        Y_test = test_mf.T
+        RinvY_test = R_op.solve(Y_test)
+        beta_test = (F.T @ RinvY_test) / FtRinvF
+        test_mf = (Y_test - F @ beta_test).T
 
     likelihood_mf = GaussianLikelihood()
     model_mf = GPMatern(locs_mf, train_mf[0], likelihood_mf)
@@ -216,8 +216,7 @@ def get_logscore(n, data_pkl, data_pkl_min):
         optimizer.step()
         scheduler.step()
 
-    obs_hf = obs_train_hf[0:n_ensemble,:]
-    mean_hf =  obs_hf.mean(axis=0)
+    obs_hf = obs_train_hf[0:n_ensemble, :]
     test_hf = obs_test_hf
     train_hf = obs_hf
 
@@ -227,23 +226,25 @@ def get_logscore(n, data_pkl, data_pkl_min):
         model_mf_eval = likelihood_mf(model_mf(locs_hf))
         y_hat_mf = model_mf_eval.loc
         F = y_hat_mf.reshape(-1, 1)
-        Y = train_hf.T                     # (N,n_train)
+        Y = train_hf.T  # (N,n_train)
 
-        R_op = model_mf.covar_module(locs_hf)/torch.exp(model_mf.covar_module.base_kernel.raw_lengthscale)   
+        R_op = model_mf.covar_module(locs_hf) / torch.exp(
+            model_mf.covar_module.base_kernel.raw_lengthscale
+        )
 
-        RinvF = R_op.solve(F)               # O(N log N)   no huge mat
-        RinvY = R_op.solve(Y)               # batched solve
+        RinvF = R_op.solve(F)  # O(N log N)   no huge mat
+        RinvY = R_op.solve(Y)  # batched solve
 
-        FtRinvF  = (F * RinvF).sum()        # scalar
+        FtRinvF = (F * RinvF).sum()  # scalar
         beta_all = (F.T @ RinvY) / FtRinvF  # (1, n_train)
 
-        train_hf      = (Y - F @ beta_all).T  # (n_train, N)
+        train_hf = (Y - F @ beta_all).T  # (n_train, N)
 
         # test set
-        Y_test        = test_hf.T
-        RinvY_test    = R_op.solve(Y_test)
-        beta_test     = (F.T @ RinvY_test) / FtRinvF
-        test_hf       = (Y_test - F @ beta_test).T
+        Y_test = test_hf.T
+        RinvY_test = R_op.solve(Y_test)
+        beta_test = (F.T @ RinvY_test) / FtRinvF
+        test_hf = (Y_test - F @ beta_test).T
 
     likelihood_hf = gpytorch.likelihoods.GaussianLikelihood()
     model_hf = GPMatern(locs_hf, train_hf[0], likelihood_hf)
@@ -306,7 +307,9 @@ def get_logscore(n, data_pkl, data_pkl_min):
     test_mf_ = test_mf.detach().numpy()
     test_mf_del = np.delete(test_mf_, left_out_mf, axis=1)
 
-    fit_mf = MultivariateNormal(mean = torch.zeros(75), covariance_matrix = torch.from_numpy(cov_mf_del))
+    fit_mf = MultivariateNormal(
+        mean=torch.zeros(75), covariance_matrix=torch.from_numpy(cov_mf_del)
+    )
     ls2 = torch.mean(-fit_mf.log_prob(torch.Tensor(test_mf_del)))
 
     with torch.no_grad():
@@ -319,10 +322,14 @@ def get_logscore(n, data_pkl, data_pkl_min):
     test_hf_ = test_hf.detach().numpy()
     test_hf_del = np.delete(test_hf_, left_out_hf, axis=1)
 
-    fit_mf = MultivariateNormal(mean = torch.zeros(800), covariance_matrix = torch.from_numpy(cov_hf_del))
+    fit_mf = MultivariateNormal(
+        mean=torch.zeros(800), covariance_matrix=torch.from_numpy(cov_hf_del)
+    )
     ls3 = torch.mean(-fit_mf.log_prob(torch.Tensor(test_hf_del)))
 
     return ls1 + ls2 + ls3
+
+
 # after the imports set a seed for reproducibility
 # anyhow, the results will be different on different machines
 # cf. https://pytorch.org/docs/stable/notes/randomness.html
@@ -342,18 +349,17 @@ ns = [5, 10, 20, 30, 50, 100, 200]
 n_list = []
 ls = []
 for n in ns:
-
-    print('With ensemble size')
+    print("With ensemble size")
     print(n)
     ls_ = get_logscore(n, data_pkl, data_pkl_min)
     n_list.append(n)
     ls.append(ls_.item())
-    print('n')
+    print("n")
     print(n)
 
-    print('log score')
+    print("log score")
     print(ls_.item())
 
     my_dict = {"n": n_list, "logscore": ls}
     df = pd.DataFrame.from_dict(my_dict)
-    df.to_csv('./results/logscores_hk_min.csv', index=False)
+    df.to_csv("./results/logscores_hk_min.csv", index=False)

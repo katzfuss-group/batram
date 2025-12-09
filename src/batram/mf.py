@@ -2,7 +2,7 @@ import logging
 import math
 from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Any, NamedTuple, cast
+from typing import Any, cast
 
 import numpy as np
 import torch
@@ -14,61 +14,9 @@ from torch.distributions import Normal
 from torch.distributions.studentT import StudentT
 from tqdm import tqdm
 
-from .data import AugmentDataMF, MultiFidelityData
-from .legmods import AugmentedData, Data, KernelResult, _PreCalcLogLik
+from .data import AugmentDataMF, AugmentedDataMF, MultiFidelityData
+from .legmods import AugmentedData, KernelResult, _PreCalcLogLik
 from .stopper import PEarlyStopper
-
-
-@dataclass
-class AugmentedDataMF:
-    """Augmented data class
-
-    Holds $n$ replicates of spatial field observed at $N$ locations. The data in
-    this class has been normalized.
-
-
-    Attributes
-    ----------
-    data_size
-        Size of the original data set
-    batch_size
-        Size of the batch
-    batch_idx
-        Index of the batch in the original data set
-    locs
-        Locations of the data. shape (N, d)
-    augmented_response
-        Augmented response of the data. Shape (n, N, m + 1)$
-    scales
-        Scales of the data. Shape (N, )
-    data
-        Original data
-
-    Notes
-    -----
-
-    m is the maximum size of the conditioning sets.
-
-    scales is called $l_i$ in the paper.
-    """
-
-    data_size: int
-    batch_size: int
-    batch_idx: torch.Tensor
-    locs: torch.Tensor
-    augmented_response: torch.Tensor
-    scales: torch.Tensor
-    data: Data
-    fidelity_sizes: torch.Tensor
-
-
-class _PreCalcLogLikMF(NamedTuple):
-    nug_sd: list[torch.Tensor]
-    alpha: list[torch.Tensor]
-    beta: list[torch.Tensor]
-    alpha_post: list[torch.Tensor]
-    beta_post: list[torch.Tensor]
-    y_tilde: list[torch.Tensor]
 
 
 def scaling_fun(k, theta_0, theta_1):
@@ -131,7 +79,7 @@ class NuggetMultiFidelity(torch.nn.Module):
         self.R = R
 
     def forward(self, data: AugmentedDataMF, r: int) -> torch.Tensor:
-        fs = data.fidelity_sizes
+        fs = data.data.fidelity_sizes
         theta = self.nugget_params
         sigma_1 = theta[: self.R]
         sigma_2 = theta[self.R :]
@@ -281,7 +229,7 @@ class TMKernelMF(torch.nn.Module):
         """Computes with Kernel params"""
         max_m = data.data.max_m
         # this is list of ms
-        fs = data.fidelity_sizes
+        fs = data.data.fidelity_sizes
         start = sum(fs[:r])
         end = sum(fs[: r + 1])
         m1 = self._determine_m(max_m, r, False)
@@ -366,7 +314,7 @@ class IntLogLikMF(torch.nn.Module):
         self, data: AugmentedDataMF, kernel_result: KernelResult, r: int
     ) -> torch.Tensor:
         tmp_res = self.precalc(
-            kernel_result, data.augmented_response[:, :, 0], data.fidelity_sizes, r
+            kernel_result, data.augmented_response[:, :, 0], data.data.fidelity_sizes, r
         )
         aux = kernel_result.GChol
         Gchol_now = aux.diagonal(dim1=-1, dim2=-2)
@@ -719,7 +667,7 @@ class MultiFidelityTM(torch.nn.Module):
         augmented_data = self.augment_data(self.data, None)
         data = self.data.response
         NN = self.data.conditioning_sets
-        fs = augmented_data.fidelity_sizes
+        fs = augmented_data.data.fidelity_sizes
         n, N = data.shape
         max_m = self.data.max_m
 
@@ -790,7 +738,7 @@ class MultiFidelityTM(torch.nn.Module):
         augmented_data = self.augment_data(self.data, None)
         data = self.data.response
         NN = self.data.conditioning_sets
-        fs = augmented_data.fidelity_sizes
+        fs = augmented_data.data.fidelity_sizes
         n, N = data.shape
         max_m = self.data.max_m
 

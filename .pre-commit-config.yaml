@@ -34,5 +34,8 @@ repos:
         language: python
         types_or: [python, pyi]
         args: [--ignore-missing-imports, --scripts-are-modules]
+        additional_dependencies:
+          - mypy==1.11.2
+          - types-requests
         require_serial: true
         exclude: ^(docs/)

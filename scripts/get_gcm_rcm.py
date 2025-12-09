@@ -1,15 +1,17 @@
+import string
+import warnings
 from pathlib import Path
+
+import certifi
+import numpy as np
 import requests
 import xarray as xr
-import numpy as np
-import string
 from requests.exceptions import SSLError
-import warnings
-import certifi
 from urllib3.exceptions import InsecureRequestWarning
 
 # RCM data server has an invalid SSL cert, so we ignore the warnings.
 warnings.filterwarnings("ignore", category=InsecureRequestWarning)
+
 
 # downloader helper, with sanity checks and progress
 # Safe-ish, with cert verification but falls back to unverified if needed.
@@ -50,6 +52,7 @@ def download(url: str, dest: Path, chunk_size: int = 1 << 20) -> None:
 
     print(f"saved {bytes_written/1e6:.1f} MBs to {dest}")
 
+
 def to_xy_and_vec(obj, var_name=None):
     """
     Flatten a 2-D DataArray into:
@@ -79,9 +82,9 @@ def to_xy_and_vec(obj, var_name=None):
         raise KeyError("Could not find 'lat' and 'lon' coordinates")
 
     # build
-    if lat_c.ndim == 1 and lon_c.ndim == 1:          # regular grid
+    if lat_c.ndim == 1 and lon_c.ndim == 1:  # regular grid
         lon2d, lat2d = np.meshgrid(lon_c, lat_c)
-    else:                                            # curvilinear / rotated
+    else:  # curvilinear / rotated
         lat2d, lon2d = lat_c, lon_c
 
     # flatten
@@ -90,28 +93,31 @@ def to_xy_and_vec(obj, var_name=None):
     val_flat = np.asarray(da).ravel()
 
     mask = np.isfinite(val_flat)
-    xy   = np.vstack([lat_flat[mask], lon_flat[mask]])   # (2, N)
-    vec  = val_flat[mask]                                # (N,)
+    xy = np.vstack([lat_flat[mask], lon_flat[mask]])  # (2, N)
+    vec = val_flat[mask]  # (N,)
 
     return xy, vec
+
 
 # Change this if you want a different date or variable,
 # (check references too see which dates/variables are available)
 # this is my birthdate :)
-DATE  = "1996-01-25"
-VAR   = "tasmax"
+DATE = "1996-01-25"
+VAR = "tasmax"
 
 # base links
-gcm_base = "https://crd-data-donnees-rdc.ec.gc.ca/CCCMA/products/CanSISE/output/CCCma/CanESM2/"
+gcm_base = (
+    "https://crd-data-donnees-rdc.ec.gc.ca/CCCMA/products/CanSISE/output/CCCma/CanESM2/"
+)
 rcm_base = "https://climex-data.srv.lrz.de/Public/CanESM2_driven_50_members/tasmax"
 
 # build member lists, different naming conventions for GCM vs RCM
 # read reference paper for details
 # https://journals.ametsoc.org/view/journals/apme/58/4/jamc-d-18-0021.1.xml
 rcm_prefixes = []
-for a in string.ascii_lowercase[1:4]:   # 'b', 'c', 'd' → 'ba' to 'dz'
+for a in string.ascii_lowercase[1:4]:  # 'b', 'c', 'd' → 'ba' to 'dz'
     for b in string.ascii_lowercase:
-        rcm_prefixes.append(f'k{a}{b}')
+        rcm_prefixes.append(f"k{a}{b}")
         if len(rcm_prefixes) == 50:
             break
     if len(rcm_prefixes) == 50:
@@ -119,7 +125,7 @@ for a in string.ascii_lowercase[1:4]:   # 'b', 'c', 'd' → 'ba' to 'dz'
 gcm_add = [
     f"historical-r{r}/day/atmos/tasmax/r{i}i1p1/"
     f"tasmax_day_CanESM2_historical-r{r}_r{i}i1p1_19500101-20201231.nc"
-    for r in range(1, 6)   # historical-r1 through historical-r5
+    for r in range(1, 6)  # historical-r1 through historical-r5
     for i in range(1, 11)  # r1i1p1 through r10i1p1
 ]
 rcm_add = [
@@ -151,18 +157,19 @@ for m in range(50):
 
     # download, open, slice
     with xr.open_dataset(gcm_file, engine="netcdf4") as gcm_ds:
-        gcm_day = gcm_ds[VAR].sel(time=DATE).squeeze().load()  
+        gcm_day = gcm_ds[VAR].sel(time=DATE).squeeze().load()
 
     with xr.open_dataset(rcm_file, engine="netcdf4") as rcm_ds:
-        rcm_day = rcm_ds[VAR].sel(time=DATE).squeeze().load()   
+        rcm_day = rcm_ds[VAR].sel(time=DATE).squeeze().load()
 
     # RCM Box for GCM, was done empirically by looking at RCM extent
     west, east = -26, 40
-    gcm_box = (gcm_day
-               .sel(lat=slice(29, 66))
-               .assign_coords(lon=((gcm_day.lon + 180) % 360) - 180)
-               .sortby("lon")
-               .sel(lon=slice(west, east)))
+    gcm_box = (
+        gcm_day.sel(lat=slice(29, 66))
+        .assign_coords(lon=((gcm_day.lon + 180) % 360) - 180)
+        .sortby("lon")
+        .sel(lon=slice(west, east))
+    )
 
     # flatten
     xy_gcm, vec_gcm = to_xy_and_vec(gcm_box)

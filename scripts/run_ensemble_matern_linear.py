@@ -1,18 +1,21 @@
-import numpy as np
-from pathlib import Path
-import pandas as pd
-from scipy.spatial.distance import cdist
-from scipy.optimize import minimize
-from scipy.stats import multivariate_normal
-from scipy.special import kv, gamma
-import pickle
-import torch
 import os
-os.environ['KMP_DUPLICATE_LIB_OK']='True'
+import pickle
+from pathlib import Path
 
-# Implementation of Matern covariance and negative log-likelihood, 
+import numpy as np
+import pandas as pd
+import torch
+from scipy.optimize import minimize
+from scipy.spatial.distance import cdist
+from scipy.special import gamma, kv
+from scipy.stats import multivariate_normal
+
+os.environ["KMP_DUPLICATE_LIB_OK"] = "True"
+
+
+# Implementation of Matern covariance and negative log-likelihood,
 # not using GPyTorch, since we want to fit smoothness nu as well.
-# Using L-BFGS-B. 
+# Using L-BFGS-B.
 def matern_correlation(dists: np.ndarray, rho: float, nu: float) -> np.ndarray:
     """
     M(r) = 2^{1-ν}/Γ(ν) (r/ρ)^ν K_ν(r/ρ), with M(0) = 1.
@@ -20,14 +23,14 @@ def matern_correlation(dists: np.ndarray, rho: float, nu: float) -> np.ndarray:
     d = dists / rho
     corr = np.zeros_like(d, dtype=float)
 
-    zero_mask = (d == 0)
+    zero_mask = d == 0
     corr[zero_mask] = 1.0
 
     pos_mask = ~zero_mask
     if np.any(pos_mask):
         d_pos = d[pos_mask]
         factor = (2.0 ** (1.0 - nu)) / gamma(nu)
-        corr[pos_mask] = factor * (d_pos ** nu) * kv(nu, d_pos)
+        corr[pos_mask] = factor * (d_pos**nu) * kv(nu, d_pos)
 
     return corr
 
@@ -51,24 +54,22 @@ def matern_nloglik(log_params: np.ndarray, dat: np.ndarray, dists: np.ndarray) -
     return -np.mean(logpdf_vals)
 
 
-def matern_param(locs: np.ndarray,
-                 data_train: np.ndarray,
-                 data_test: np.ndarray) -> np.ndarray:
+def matern_param(
+    locs: np.ndarray, data_train: np.ndarray, data_test: np.ndarray
+) -> np.ndarray:
     dists = cdist(locs, locs)
     init = np.log(np.array([1.0, 0.1 * np.max(dists), 1.0]))
 
     def obj(p):
         return matern_nloglik(p, data_train, dists)
 
-    res = minimize(obj, init, method="L-BFGS-B",
-                   options=dict(maxiter=100, ftol=1e-3))
+    res = minimize(obj, init, method="L-BFGS-B", options=dict(maxiter=100, ftol=1e-3))
     # Optional: you can evaluate the holdout score as in R:
     # ls = -matern_nloglik(res.x, data_test, dists)
     return res.x
 
-def get_logscore(n, data_pkl):
 
-    locs_lf = data_pkl["locs_lf"]
+def get_logscore(n, data_pkl):
     locs_mf = data_pkl["locs_mf"]
     locs_hf = data_pkl["locs_hf"]
 
@@ -82,33 +83,45 @@ def get_logscore(n, data_pkl):
     for j in range(10):
         for i in range(10):
             col_now = np.zeros(900)
-            idx_change = [90*j + 3*i, 90*j + 3*i + 1, 90*j + 3*i + 2, 
-                        90*j + 3*i + 30, 90*j + 3*i + 31, 90*j + 3*i + 32,
-                        90*j + 3*i + 60, 90*j + 3*i + 61, 90*j + 3*i + 62]
+            idx_change = [
+                90 * j + 3 * i,
+                90 * j + 3 * i + 1,
+                90 * j + 3 * i + 2,
+                90 * j + 3 * i + 30,
+                90 * j + 3 * i + 31,
+                90 * j + 3 * i + 32,
+                90 * j + 3 * i + 60,
+                90 * j + 3 * i + 61,
+                90 * j + 3 * i + 62,
+            ]
             locs_changed = locs_hf[idx_change]
-            x = torch.mean(locs_changed[:,0])
-            y = torch.mean(locs_changed[:,1])
+            x = torch.mean(locs_changed[:, 0])
+            y = torch.mean(locs_changed[:, 1])
             locs_now = [x.item(), y.item()]
-            col_now[idx_change] = 1/9
+            col_now[idx_change] = 1 / 9
             list_of_cols.append(col_now)
             list_of_coords.append(locs_now)
 
     A = np.stack(list_of_cols, axis=0)
 
-    # Second averaging matrix 
+    # Second averaging matrix
 
     list_of_cols = []
     list_of_coords = []
     for j in range(5):
         for i in range(5):
             col_now = np.zeros(100)
-            idx_change = [20*j + 2*i, 20*j + 2*i + 1, 20*j + 2*i + 10, 
-                        20*j + 2*i + 11]
+            idx_change = [
+                20 * j + 2 * i,
+                20 * j + 2 * i + 1,
+                20 * j + 2 * i + 10,
+                20 * j + 2 * i + 11,
+            ]
             locs_changed = locs_mf[idx_change]
-            x = torch.mean(locs_changed[:,0])
-            y = torch.mean(locs_changed[:,1])
+            x = torch.mean(locs_changed[:, 0])
+            y = torch.mean(locs_changed[:, 1])
             locs_now = [x.item(), y.item()]
-            col_now[idx_change] = 1/4
+            col_now[idx_change] = 1 / 4
             list_of_cols.append(col_now)
             list_of_coords.append(locs_now)
 
@@ -121,7 +134,7 @@ def get_logscore(n, data_pkl):
     test_hf = obs_hf[test_slice, :]
     test_mf = obs_mf[test_slice, :]
     test_lf = obs_lf[test_slice, :]
-    
+
     par = matern_param(locs_hf, train_hf.T, test_hf.T)
     dists_hf = cdist(locs_hf, locs_hf)
     cov_hf = matern_covariance(dists_hf, par)
@@ -131,7 +144,7 @@ def get_logscore(n, data_pkl):
         for i in range(1, 11):
             idx = 90 * (j - 1) + 3 * (i - 1) + 1  # R 1-based
             left_out_hf.append(idx)
-    left_out_hf = np.array(left_out_hf, dtype=int) - 1 
+    left_out_hf = np.array(left_out_hf, dtype=int) - 1
 
     left_out_mf = []
     for j in range(1, 6):
@@ -149,7 +162,9 @@ def get_logscore(n, data_pkl):
 
     # HF
     cov_hf_del = np.delete(np.delete(cov_hf, left_out_hf, axis=0), left_out_hf, axis=1)
-    cov_hfmf_del = np.delete(np.delete(cov_hfmf, left_out_hf, axis=0), left_out_mf, axis=1)
+    cov_hfmf_del = np.delete(
+        np.delete(cov_hfmf, left_out_hf, axis=0), left_out_mf, axis=1
+    )
     cov_hflf_del = np.delete(cov_hflf, left_out_hf, axis=0)
 
     # MF
@@ -159,9 +174,9 @@ def get_logscore(n, data_pkl):
     # --------------------------
     # Full covariance (HF + MF + LF)
     # --------------------------
-    row1 = np.hstack([cov_hf_del,        cov_hfmf_del,        cov_hflf_del])
-    row2 = np.hstack([cov_hfmf_del.T,    cov_mf_del,          cov_mflf_del])
-    row3 = np.hstack([cov_hflf_del.T,    cov_mflf_del.T,      cov_lf])
+    row1 = np.hstack([cov_hf_del, cov_hfmf_del, cov_hflf_del])
+    row2 = np.hstack([cov_hfmf_del.T, cov_mf_del, cov_mflf_del])
+    row3 = np.hstack([cov_hflf_del.T, cov_mflf_del.T, cov_lf])
 
     cov_full = np.vstack([row1, row2, row3])
 
@@ -169,12 +184,13 @@ def get_logscore(n, data_pkl):
     test_mf_del = np.delete(test_mf, left_out_mf, axis=1)
     test_full = np.hstack([test_hf_del, test_mf_del, test_lf])
 
-    mvn_full = multivariate_normal(mean=np.zeros(cov_full.shape[0]),
-                               cov=cov_full,
-                               allow_singular=True)
+    mvn_full = multivariate_normal(
+        mean=np.zeros(cov_full.shape[0]), cov=cov_full, allow_singular=True
+    )
     full_nll = -np.mean(mvn_full.logpdf(test_full))
     print("Full (HF + MF + LF) -mean loglik:", full_nll)
     return full_nll
+
 
 # Load data
 data_fp = Path("../tests/data/data_mf.pkl")
@@ -185,19 +201,17 @@ ns = [5, 10, 20, 30, 50, 100, 200]
 n_list = []
 ls = []
 for n in ns:
-
-    print('With ensemble size')
+    print("With ensemble size")
     print(n)
     ls_ = get_logscore(n, data_pkl)
     n_list.append(n)
     ls.append(ls_)
-    print('n')
+    print("n")
     print(n)
 
-    print('log score')
+    print("log score")
     print(ls_)
 
     my_dict = {"n": n_list, "logscore": ls}
     df = pd.DataFrame.from_dict(my_dict)
-    df.to_csv('./results/logscores_matern_linear.csv', index=False)
-
+    df.to_csv("./results/logscores_matern_linear.csv", index=False)

@@ -1,23 +1,21 @@
-import os
 import gc
-os.environ['KMP_DUPLICATE_LIB_OK']='True'
-
+import os
 
 # Packages for working with array data and tensors]
 import numpy as np
+import pandas as pd
 import torch
-import numpy as np
 
 # Packages for building transport maps
-from veccs.orderings import maxmin_pred_cpp, find_nns_l2_mf
-import scipy.spatial.distance
+from veccs.orderings import find_nns_l2_mf, maxmin_pred_cpp
 
-from batram.data import MultiFidelityData, AugmentDataMF
+from batram.data import MultiFidelityData
 from batram.mf import MultiFidelityTM
-import pandas as pd
+
+os.environ["KMP_DUPLICATE_LIB_OK"] = "True"
+
 
 def get_logscore(n, locs_gcm, locs_rcm, obs_gcm, obs_rcm):
-    
     test_idx = [44, 33, 27, 1, 10, 18, 12, 29, 37, 47]
     train_idx = list(set(range(50)) - set(test_idx))
 
@@ -27,36 +25,30 @@ def get_logscore(n, locs_gcm, locs_rcm, obs_gcm, obs_rcm):
     obs_gcm_test = torch.Tensor(obs_gcm[test_idx, :])
     obs_rcm_test = torch.Tensor(obs_rcm[test_idx, :])
 
-    mean_gcm = obs_gcm_train.mean(dim=0, keepdim = True)
-    sd_gcm = obs_gcm_train.std(dim=0, keepdim= True)
+    mean_gcm = obs_gcm_train.mean(dim=0, keepdim=True)
+    sd_gcm = obs_gcm_train.std(dim=0, keepdim=True)
     mean_rcm = obs_rcm_train.mean(dim=0, keepdim=True)
-    sd_rcm = obs_rcm_train.std(dim = 0, keepdim=True)
-    train_gcm = (obs_gcm_train - mean_gcm)/sd_gcm
-    train_rcm = (obs_rcm_train - mean_rcm)/sd_rcm
-    test_gcm = (obs_gcm_test - mean_gcm)/sd_gcm
-    test_rcm = (obs_rcm_test - mean_rcm)/sd_rcm
+    sd_rcm = obs_rcm_train.std(dim=0, keepdim=True)
+    train_gcm = (obs_gcm_train - mean_gcm) / sd_gcm
+    train_rcm = (obs_rcm_train - mean_rcm) / sd_rcm
+    test_gcm = (obs_gcm_test - mean_gcm) / sd_gcm
+    test_rcm = (obs_rcm_test - mean_rcm) / sd_rcm
     train = torch.hstack((train_gcm, train_rcm))
     test = torch.hstack((test_gcm, test_rcm))
 
-    print('Ordering locations...')
+    print("Ordering locations...")
 
     locs = torch.vstack((torch.Tensor(locs_gcm), torch.Tensor(locs_rcm)))
 
     # Maximin ordering of the locations using veccs
     ord = maxmin_pred_cpp(locs_gcm, locs_rcm)
 
-    ord_gcm = ord[:336]
-    ord_rcm = ord[336:]
-
     locs_ord = locs[ord, ...]
     obs_ord = train[..., ord]
     obs_test_ord = test[..., ord]
-    obs_ord_gcm = train_gcm[..., ord_gcm]
-    # indexes from 0 for easier indexing
-    obs_ord_hf = train_rcm[..., ord_rcm - 336]
 
     # Finding nearest neighbors using the `veccs` package.
-    # For this example let's use 20 max nearest neighbors. 
+    # For this example let's use 20 max nearest neighbors.
     # For the multifidelity version, pass a list of the ordered locs from
     # lowest to highest fidelity
     locs_all = [locs_ord[:336].detach().numpy(), locs_ord[336:].detach().numpy()]
@@ -67,46 +59,43 @@ def get_logscore(n, locs_gcm, locs_rcm, obs_gcm, obs_rcm):
     data = MultiFidelityData.new(locs_ord, obs_ord, torch.as_tensor(nn), fidelity_sizes)
 
     R = 2  # Number of fidelities
-    theta_init = torch.zeros((9*R-2))
+    theta_init = torch.zeros(9 * R - 2)
     log_2m = data.response[:, 0].square().mean().log()
     # Nugget 1
-    theta_init[:R] = log_2m 
+    theta_init[:R] = log_2m
     # Nugget 2
-    theta_init[R:2*R] = 0.2
+    theta_init[R : 2 * R] = 0.2
     # Sigma 1
-    theta_init[2*R:3*R] = 0.0
+    theta_init[2 * R : 3 * R] = 0.0
     # Sigma 2
-    theta_init[3*R:4*R] = 0.0
+    theta_init[3 * R : 4 * R] = 0.0
     # Theta q 0 within
-    theta_init[4*R:5*R] = 0.0
+    theta_init[4 * R : 5 * R] = 0.0
     # Theta q 1 within
-    theta_init[5*R:6*R] = 0.0
+    theta_init[5 * R : 6 * R] = 0.0
     # Theta q 0 between
-    theta_init[6*R:7*R-1] = 0.0
+    theta_init[6 * R : 7 * R - 1] = 0.0
     # Theta q 1 between
-    theta_init[7*R-1:8*R-2] = 0.0
+    theta_init[7 * R - 1 : 8 * R - 2] = 0.0
     # Theta gammas
-    theta_init[8*R-2:9*R-2] = -1.0
+    theta_init[8 * R - 2 : 9 * R - 2] = -1.0
 
-    print('Training transport map...')
+    print("Training transport map...")
 
     # nug_mult = 4 as in the paper
-    tm = MultiFidelityTM(data, theta_init, nug_mult = 4.0)
+    tm = MultiFidelityTM(data, theta_init, nug_mult=4.0)
     # The `nsteps` argument is always required. When using a user-defined optimizer
     # we ignore the initial learning rate. The `batch_size` specifies how to perform
     # minibatch gradient descent. The `test_data` argument is optional and is used
     # to compute the test loss at each step.
     nsteps = 200
-    opt = torch.optim.Adam(tm.parameters(), lr=0.01, weight_decay=1e-4)
-    sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, nsteps, eta_min = 0.001)
-    res = tm.fit(
-        nsteps, 0.01
+    tm.fit(nsteps, 0.01)
+
+    print("Computing log-scores...")
+
+    ls = torch.zeros(
+        50,
     )
-
-    print('Computing log-scores...')
-
-    ls = torch.zeros(50,)
-    gspec = {"wspace": 0.1, "hspace": 0.1}
     tm.eval()
     for i in range(10):
         gc.collect()
@@ -120,6 +109,7 @@ def get_logscore(n, locs_gcm, locs_rcm, obs_gcm, obs_rcm):
 
     return ls_mean
 
+
 # Weird behavior if lat/lon are not in expected order
 def force_latlon_first(locs):
     """
@@ -132,9 +122,9 @@ def force_latlon_first(locs):
     locs = np.asarray(locs)
 
     # --- 1. Ensure shape (N, 2) -------------------------------------------
-    if locs.shape[1] == 2:                  # already (N, 2)
+    if locs.shape[1] == 2:  # already (N, 2)
         out = locs.copy()
-    elif locs.shape[0] == 2:                # transpose from (2, N)
+    elif locs.shape[0] == 2:  # transpose from (2, N)
         out = locs.T.copy()
     else:
         raise ValueError("locs must be (N,2) or (2,N)")
@@ -144,9 +134,10 @@ def force_latlon_first(locs):
 
     # Latitude must live in ±90°; longitude often exceeds that.
     if (np.abs(lat) > 90).any() and (np.abs(lon) <= 90).all():
-        out = out[:, ::-1]                  # swap columns
+        out = out[:, ::-1]  # swap columns
 
     return out
+
 
 # after the imports set a seed for reproducibility
 # anyhow, the results will be different on different machines
@@ -168,18 +159,17 @@ n_list = []
 ls_list = []
 
 for n in ns:
-
-    print('With ensemble size')
+    print("With ensemble size")
     print(n)
     ls = get_logscore(n, locs_gcm, locs_rcm, obs_gcm, obs_rcm)
     n_list.append(n)
     ls_list.append(ls.item())
-    print('n')
+    print("n")
     print(n)
 
-    print('log score')
+    print("log score")
     print(ls.item())
 
     my_dict = {"n": n_list, "logscore": ls_list}
     df = pd.DataFrame.from_dict(my_dict)
-    df.to_csv('./results/logscores_mf_climate.csv', index=False)
+    df.to_csv("./results/logscores_mf_climate.csv", index=False)
