@@ -20,6 +20,10 @@ For a quick introduction to the package, see the [getting-started notebook](note
 key topics such as data preprocessing, model fitting, model evaluation, and
 posterior sampling.
 
+## Paper results/figures reproduction
+
+Follow the instructions in [the scripts readme](scripts/README.md) to reproduce the results from the paper.
+
 ## Acknowledgements
 
 An initial Python
