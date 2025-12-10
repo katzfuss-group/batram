@@ -3,7 +3,6 @@ from dataclasses import dataclass
 import torch
 
 from batram.base_functions import scaling_mf
-from batram.mf import AugmentedDataMF
 
 
 @dataclass
@@ -92,6 +91,60 @@ class MultiFidelityData:
         return MultiFidelityData(
             locs, response, augmented_response, conditioning_set, fidelity_sizes, max_m
         )
+
+
+@dataclass
+class AugmentedDataMF:
+    """Augmented data class
+
+    Holds $n$ replicates of spatial field observed at $N_1, N_2, ..., N_R$ locations.
+    The data in this class has been normalized.
+
+
+    Attributes
+    ----------
+    data_size
+        Size of the original data set
+    batch_size
+        Size of the batch
+    batch_idx
+        Index of the batch in the original data set
+    locs
+        Locations of the data. shape (N, d)
+    augmented_response
+        Augmented response of the data. Shape (n, N, m + 1)$
+    scales
+        Scales of the data. Shape (N, )
+    data
+        Original data
+
+    Notes
+    -----
+
+    m is the maximum size of the conditioning sets.
+
+    scales is called $l_i$ in the paper.
+    """
+
+    data_size: int
+    batch_size: int
+    batch_idx: torch.Tensor
+    locs: torch.Tensor
+    augmented_response: torch.Tensor
+    scales: torch.Tensor
+    data: MultiFidelityData
+
+    @property
+    def response(self) -> torch.Tensor:
+        return self.augmented_response[:, :, 0]
+
+    @property
+    def response_neighbor_values(self) -> torch.Tensor:
+        return self.augmented_response[:, :, 1:]
+
+    @property
+    def max_m(self) -> int:
+        return self.augmented_response.shape[-1] - 1
 
 
 class AugmentDataMF(torch.nn.Module):
