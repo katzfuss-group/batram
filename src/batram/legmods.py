@@ -583,9 +583,9 @@ class IntLogLik(torch.nn.Module):
             - tmp_res.alpha.lgamma()
         )  # (N,)
 
-        assert (
-            loglik.isfinite().all().item()
-        ), "Log-likelihood contains non finite values."
+        assert loglik.isfinite().all().item(), (
+            "Log-likelihood contains non finite values."
+        )
 
         return loglik
 
@@ -645,6 +645,7 @@ class SimpleTM(torch.nn.Module):
         loss = -aug_data.data_size / aug_data.batch_size * intloglik.sum()
         return loss
 
+    @torch.inference_mode(mode=True)
     def cond_sample(
         self,
         x_fix=torch.tensor([]),
@@ -1006,6 +1007,7 @@ class SimpleTM(torch.nn.Module):
         norm = torch.distributions.Normal(loc=0.0, scale=1.0)
         return norm.log_prob(z[..., n_fixed:last_ind]) + z_logdet[..., n_fixed:last_ind]
 
+    @torch.inference_mode(mode=True)
     def score(self, obs, x_fix=torch.tensor([]), last_ind=None):
         """
         Joint log density.
