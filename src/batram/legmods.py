@@ -583,9 +583,9 @@ class IntLogLik(torch.nn.Module):
             - tmp_res.alpha.lgamma()
         )  # (N,)
 
-        assert loglik.isfinite().all().item(), (
-            "Log-likelihood contains non finite values."
-        )
+        assert (
+            loglik.isfinite().all().item()
+        ), "Log-likelihood contains non finite values."
 
         return loglik
 
