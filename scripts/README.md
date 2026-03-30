@@ -1,24 +1,100 @@
 # Paper reproduction
 
-To reproduce figures and results of the paper, follow the instructions here. First, to verify your installation and to get used to the package usage, try running all the cells in the [getting started notebook](../notebooks/tutorial-mf.ipynb).
+To reproduce the figures and results of the paper, follow the instructions below. As a first check that your installation is working, run all cells in the [getting started notebook](../notebooks/tutorial-mf.ipynb).
 
-Next, we download the GCM-RCM dataset we use in the paper. We will use the script `get_gcm_rcm.py`, which needs some additional dependencies, which can be installed via conda by running. It is also included in the [data folder](../tests/data) for convenience.
+## Download the climate data
 
-```
+We use the GCM-RCM dataset in the paper. The downloader script is `get_gcm_rcm.py`, which requires a few additional dependencies:
+
+```bash
 conda install -c conda-forge xarray dask netCDF4 bottleneck
 conda update -c conda-forge ca-certificates certifi openssl requests urllib3
 ```
 
-Two important things to note from the script before you run:
-1) SSL certificate for the GCM data was expired at the time of writing this note (11/14/2025), so we ignore those warnings to get the data. However, the script is written in such a way that we try to safe download (with certificates) first, and if that fails we ignore the warnings.
-2) The files for GCMs are somewhat big (around $900$ MBs for each ensemble member). They contain a lot of time and space points we are not interested in this analysis, so we download them locally, subset them, and erase the downloaded file. You end up with four moderately sized files (two locations, two observations), not surpassing $40$ MBs.
+A few practical notes before running the downloader:
 
-Now, running the downloader for the specific day we prespecify (01-25-1996, this could be changed as needed in the script), run `python get_gcm_rcm.py`. The files will be downloaded this [data folder](../tests/data), since some scripts/notebooks assume they are there. We download max daily temperature, but you can also specify another variable included in both GCM and RCM models.
+1. At the time this README was originally written, the SSL certificate for the GCM source had expired. The download script therefore first attempts a standard secure download, and only falls back to ignoring certificate warnings if that fails.
+2. The raw GCM files are fairly large (around 900 MB per ensemble member), but the script subsets them to the portion needed for the paper and removes the large temporary files afterwards. The resulting files stored locally are much smaller.
 
-Finally, the figures themselves are reproduced in different notebooks. You need to install `seaborn` for some visualizations.
-- Figures 1, 8 (example ensemble members form GCM-RCM pairs, samples from the model) in the [climate notebook](../notebooks/climate-example.ipynb)
-- Figure 2 (illustration  of the conditional maximin order) in the [maximin order notebook](../notebooks/maxmin-order-plot.ipynb)
-- Figure 3 (intuition that will come handy for model parametrization) in the [intuition notebook](../notebooks/intuition.ipynb)
-- Figure 4 (model performance/sample when there is a linear relationship, i.e., block averages, between fidelities) in the [linear notebook](../notebooks/linear.ipynb)
-- Figures 5, 9 (log-scores): To get the actual logscores computed from the different considered models, you have to run the scripts that are named `run_ensemble_{method}_{experiment}.py`, replacing the appropriate method and experiment (methods are `mf, matern, hk, nargp, VAE` and experiments are `linear, min, climate`). This will create some `.csv` files in the `./results` directory. Finally, in the [plot notebook](../notebooks/plot-logscores.ipynb) you can reproduce the Figures. Files with log-scores included in the repo, but you should be able to reproduce them.
-- Figure 6 (model performance when there is a non-linear, i.e., block minima between fidelities) in the [nonlinear notebook](../notebooks/nonlinear.ipynb). Very similar than the linear notebook but with less diagnostics about the model.
+To download the prespecified day used in the paper (01-25-1996), run:
+
+```bash
+python get_gcm_rcm.py
+```
+
+The processed files are saved in the [data folder](../tests/data), since several scripts and notebooks assume that location. The current configuration downloads daily maximum temperature, though the script can be adapted to other variables present in both the GCM and RCM products.
+
+## Reproduce the paper figures
+
+Some of the paper figures are generated directly from notebooks:
+
+- Figures 1 and 8 (example GCM-RCM ensemble members and model samples): [climate notebook](../notebooks/climate-example.ipynb)
+- Figure 2 (conditional maximin ordering illustration): [maximin order notebook](../notebooks/maxmin-order-plot.ipynb)
+- Figure 3 (intuition for the model parametrization): [intuition notebook](../notebooks/intuition.ipynb)
+- Figure 4 (linear relationship across fidelities, using block averages): [linear notebook](../notebooks/linear.ipynb)
+- Figure 5 (log-scores comparison, pre-saved log-scores, see below how to reproduce them): [logscores notebook](../notebooks/linear.ipynb)
+- Figure 6 (nonlinear relationship across fidelities, using block minima): [nonlinear notebook](../notebooks/nonlinear.ipynb)
+- Mini-batching usage is illustrated in the [mini-batching notebook](../notebooks/climate-example-mb.ipynb)
+
+For some visualizations you may also need:
+
+```bash
+pip install seaborn
+```
+
+## Reproduce the log-score experiments
+
+The experiment runners are
+
+- `run_matern.py`
+- `run_hk.py`
+- `run_mf.py`
+- `run_nargp.py`
+- `run_vae.py`
+
+Each script is controlled from the command line through two main options:
+
+- `--experiment` chooses which experiment to run
+- `--include-all-logscores` controls whether the output CSV stores every individual log-score or only grouped means
+
+The supported experiments are:
+
+- `linear`
+- `min`
+- `climate`
+
+### Basic usage
+
+Run a model on a given experiment with:
+
+```bash
+python run_mf.py --experiment linear
+python run_nargp.py --experiment min
+python run_hk.py --experiment climate
+```
+
+If you want the output file to contain **all individual log-scores**, include the flag:
+
+```bash
+python run_mf.py --experiment climate --include-all-logscores
+```
+
+If you omit that flag, the script writes a more compact results file containing only the corresponding means.
+
+### MF linear variant
+
+The `mflinear` case is handled inside `run_mf.py` rather than through a separate top-level script. Use:
+
+```bash
+python run_mf.py --experiment linear --variant mflinear
+```
+
+or, for example,
+
+```bash
+python run_mf.py --experiment climate --variant mflinear --include-all-logscores
+```
+
+### Output files
+
+The scripts write `.csv` result files to the `results` directory. These files can then be used in the [plot notebook](../notebooks/plot-logscores.ipynb) to reproduce the log-score figures.

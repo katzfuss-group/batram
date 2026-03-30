@@ -84,7 +84,10 @@ class MultiFidelityData:
     def new(locs, response, conditioning_set, fidelity_sizes):
         """Creates a new data object."""
         nlocs = locs.shape[0]
-        ecs = torch.hstack([torch.arange(nlocs).reshape(-1, 1), conditioning_set])
+        dev = conditioning_set.device
+        ecs = torch.hstack(
+            [torch.arange(nlocs, device=dev).reshape(-1, 1), conditioning_set]
+        )
         augmented_response = torch.where(ecs == -1, torch.nan, response[:, ecs])
         max_m = int((augmented_response.shape[-1] - 1) / 2)
 
@@ -158,15 +161,26 @@ class AugmentDataMF(torch.nn.Module):
 
     def __init__(self):
         super().__init__()
+        self._cached_scales: torch.Tensor
+        self._cached_key: tuple[int, torch.device, torch.dtype]
 
     def forward(
         self, data: MultiFidelityData, batch_idx: None | torch.Tensor = None
     ) -> AugmentedDataMF:
+        dev = data.locs.device
         if batch_idx is None:
-            batch_idx = torch.arange(data.response.shape[1])
-        # batched_data = data[batch_idx]
-        scales = scaling_mf(data.locs, data.conditioning_sets, data.fidelity_sizes)
+            batch_idx = torch.arange(data.response.shape[1], device=dev)
+        else:
+            batch_idx = batch_idx.to(dev, dtype=torch.long)
 
+        key = (id(data), data.locs.device, data.locs.dtype)
+        if self._cached_key is None or self._cached_key != key:
+            self._cached_scales = scaling_mf(
+                data.locs, data.conditioning_sets, data.fidelity_sizes
+            )
+            self._cached_key = key
+
+        scales = self._cached_scales
         return AugmentedDataMF(
             data_size=data.response.shape[1],
             batch_size=batch_idx.shape[0],
