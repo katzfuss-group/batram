@@ -52,14 +52,25 @@ def scaling_mf(
     Returns:
     scale: Scaling of the data. Shape (N, )
     """
-    scales = torch.zeros(sum(fs))
-    for i in range(1, sum(fs)):
+    locs_ord = torch.as_tensor(locs_ord)
+    NN = torch.as_tensor(NN)
+    fs_t = torch.as_tensor(fs).detach().cpu()
+    fs_list = [int(x) for x in fs_t.tolist()]
+    N = sum(fs_list)
+    scales = torch.zeros(N, device=locs_ord.device, dtype=locs_ord.dtype)
+    for i in range(1, N):
         loc = locs_ord[i]
         nn_now = NN[i]
         nn_now_f = nn_now[nn_now != -1]
+        if nn_now_f.numel() == 0:
+            continue
         locs_nn = locs_ord[nn_now_f]
         distances = torch.norm(locs_nn - loc, dim=1)
         scales[i] = distances.min()
-    scales[0] = scales[1].square().div(scales[5])
-    scales = scales.div(scales[0])
+    # heuristic fails if less than 5 points
+    if N > 5:
+        scales[0] = scales[1].square().div(scales[5])
+    else:
+        scales[0] = 1.0
+    scales = scales.div(scales[0].clamp(min=1e-12))
     return scales
