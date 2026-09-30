@@ -104,7 +104,7 @@ def test_legmods_cond_samp_bayes(simple_data: Data) -> None:
     # NOTE: This is just a fingerprint. It can change if the implementation
     # changes. It can also change if the data (from the `simple_data` fixture) or
     # RNG changes.
-    assert sample_abs_sum == pytest.approx(56.2650)
+    assert sample_abs_sum == pytest.approx(56.2531)
 
 
 def test_legmods_cond_samp_multi_samples(simple_data: Data) -> None:
@@ -123,7 +123,7 @@ def test_legmods_score(simple_data: Data) -> None:
     with torch.no_grad():
         score = tm.score(simple_data.response[0, :])
 
-    assert score == pytest.approx(-49.6006, abs=1e-3)
+    assert score == pytest.approx(-49.6071, abs=1e-3)
 
 
 def test_legmods_score_with_xfix(simple_data: Data) -> None:
@@ -140,7 +140,7 @@ def test_legmods_score_last_index(simple_data: Data) -> None:
     obs = simple_data.response[0, :]
     with torch.no_grad():
         score = tm.score(obs, last_ind=last_index)
-    assert score == pytest.approx(-31.9082, 1e-5)
+    assert score == pytest.approx(-31.9104, 1e-5)
 
 
 def test_legmods_score_xfix_greater_than_last_ind(simple_data: Data) -> None:
@@ -150,6 +150,51 @@ def test_legmods_score_xfix_greater_than_last_ind(simple_data: Data) -> None:
     x_fix = simple_data.response[1, :6]
     with torch.no_grad(), pytest.raises(ValueError):
         tm.score(obs, x_fix, last_ind=last_index)
+
+
+def test_legmods_prediction_uses_learned_m(simple_data: Data) -> None:
+    # sanity check that prediction and evaluation use the learned m
+    # rather than the size of the stored conditioning sets
+    # dropping extra neighbors from the stored conditioning sets shouldn't
+    # change the scores, map, or map inverse
+
+    theta_init = torch.tensor(
+        [simple_data.response[:, 0].square().mean().log(), 0.3, 0.0, 0.0, 0.1, -1.0]
+    )
+
+    tm = SimpleTM(simple_data, theta_init, False, smooth=1.5, nug_mult=4.0)
+    max_m = simple_data.conditioning_sets.shape[1]
+    m = int(tm.kernel._determine_m(max_m))
+    assert m < max_m  # otherwise this test is vacuous
+
+    data_m = Data.new(
+        simple_data.locs,
+        simple_data.response,
+        simple_data.conditioning_sets[:, :m],
+    )
+    tm_m = SimpleTM(data_m, theta_init, False, smooth=1.5, nug_mult=4.0)
+
+    obs = simple_data.response[:2, :]
+    gen = torch.Generator().manual_seed(0)
+    z = torch.randn(obs.shape, generator=gen, dtype=obs.dtype)
+    with torch.no_grad():
+        # the truncated model is the same model: same m, same training loss
+        assert int(tm_m.kernel._determine_m(m)) == m
+        assert torch.allclose(tm(), tm_m())
+
+        # scores should be the same
+        assert torch.allclose(tm.score(obs[0]), tm_m.score(obs[0]))
+
+        # the map and its log-determinants should be the same
+        z_full, logdet_full = tm.map_and_logdet(obs)
+        z_m, logdet_m = tm_m.map_and_logdet(obs)
+        assert torch.allclose(z_full, z_m)
+        assert torch.allclose(logdet_full, logdet_m)
+
+        # inverse map should be the same
+        x_full = tm.inverse_map(z, sample_nugget=False)
+        x_m = tm_m.inverse_map(z, sample_nugget=False)
+        assert torch.allclose(x_full, x_m)
 
 
 def test_legmods_nugget_mean(simple_data: Data) -> None:

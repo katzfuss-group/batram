@@ -705,7 +705,7 @@ class SimpleTM(torch.nn.Module):
         beta_post = tmp_res.beta_post
         alpha_post = tmp_res.alpha_post
         n, N = data.shape
-        m = NN.shape[1]
+        m = int(self.kernel._determine_m(NN.shape[1]))
         # loop over variables/locations
 
         if last_ind is None:
@@ -941,7 +941,7 @@ class SimpleTM(torch.nn.Module):
         torch.atleast_2d(obs)
         n_input = obs.size(0)
 
-        m = NN.shape[1]
+        m = int(self.kernel._determine_m(NN.shape[1]))
 
         if last_ind is None:
             last_ind = N
