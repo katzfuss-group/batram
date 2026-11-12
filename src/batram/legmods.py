@@ -220,12 +220,18 @@ class AugmentData(torch.nn.Module):
         super().__init__()
 
     def forward(
-        self, data: Data, batch_idx: None | torch.Tensor = None
+        self,
+        data: Data,
+        batch_idx: None | torch.Tensor = None,
+        scales: None | torch.Tensor = None,
     ) -> AugmentedData:
+        """``scales`` are the scales of all locations, computed from ``data``
+        if not given. Giving them can cache the scales."""
         if batch_idx is None:
             batch_idx = torch.arange(data.response.shape[1])
         # batched_data = data[batch_idx]
-        scales = compute_scale(data.locs, data.conditioning_sets)
+        if scales is None:
+            scales = compute_scale(data.locs, data.conditioning_sets)
 
         return AugmentedData(
             data_size=data.response.shape[1],
@@ -537,14 +543,35 @@ class _PreCalcLogLik(NamedTuple):
     y_tilde: torch.Tensor
 
 
+class _LocationPreCalc(NamedTuple):
+    sigma: torch.Tensor
+    nug_mean: torch.Tensor
+    chol: torch.Tensor
+    y_tilde: torch.Tensor
+    alpha_post: torch.Tensor
+    beta_post: torch.Tensor
+
+
+def default_block_size(n: int, max_entries: int = 2**22, min_size: int = 8) -> int:
+    """Default number of locations per block in `SimpleTM.score`,
+    `SimpleTM.log_prob_contributions` and `SimpleTM.cond_sample`.
+
+    Chosen so that one block's ``(block_size, n, n)`` tensor has about
+    ``max_entries`` entries (32 MB in float64), where ``n`` is the number of
+    training replicates, and with at least ``min_size`` locations per block.
+    """
+    return max(min_size, max_entries // (n * n))
+
+
 class IntLogLik(torch.nn.Module):
     def __init__(self, nug_mult: float = 4.0):
         super().__init__()
         self.nug_mult = torch.tensor(nug_mult)
 
     def precalc(self, kernel_result: KernelResult, response) -> _PreCalcLogLik:
-        nug_mean = kernel_result.nug_mean.squeeze()  # had shape (N, 1, 1)
-        nug_sd = nug_mean.mul(self.nug_mult).squeeze()  # shape (N,)
+        # reshape so that a batch of one location keeps its location dimension
+        nug_mean = kernel_result.nug_mean.reshape(-1)  # shape (N, )
+        nug_sd = nug_mean.mul(self.nug_mult)  # shape (N,)
         alpha = nug_mean.pow(2).div(nug_sd.pow(2)).add(2)  # shape (N,)
         beta = nug_mean.mul(alpha.sub(1))  # shape (N,)
 
@@ -555,7 +582,8 @@ class IntLogLik(torch.nn.Module):
         n = response.shape[0]
         y_tilde = torch.linalg.solve_triangular(
             kernel_result.GChol, response.t().unsqueeze(-1), upper=False
-        ).squeeze()  # (N, n)
+        )
+        y_tilde = y_tilde.squeeze(-1)  # (N, n)
         alpha_post = alpha.add(n / 2)  # (N),
         beta_post = beta + y_tilde.square().sum(dim=1).div(2)  # (N,)
 
@@ -645,12 +673,14 @@ class SimpleTM(torch.nn.Module):
         loss = -aug_data.data_size / aug_data.batch_size * intloglik.sum()
         return loss
 
+    # inference_mode removes additional overhead compared to no_grad
     @torch.inference_mode(mode=True)
     def cond_sample(
         self,
         x_fix=torch.tensor([]),
         last_ind=None,
         num_samples: int = 1,
+        block_size: int | None = None,
     ):
         """
         Draws random samples from the transport map distribution, possibly
@@ -660,7 +690,13 @@ class SimpleTM(torch.nn.Module):
         N = data.shape[1]
         z = Normal(loc=0.0, scale=1.0).sample((num_samples, N))
 
-        return self.inverse_map(z, x_fix=x_fix, last_ind=last_ind, sample_nugget=True)
+        return self.inverse_map(
+            z,
+            x_fix=x_fix,
+            last_ind=last_ind,
+            sample_nugget=True,
+            block_size=block_size,
+        )
 
     def inverse_map(
         self,
@@ -668,6 +704,7 @@ class SimpleTM(torch.nn.Module):
         x_fix=torch.tensor([]),
         last_ind: int | None = None,
         sample_nugget: bool = False,
+        block_size: int | None = None,
     ):
         """
         Inverse of the transport map.
@@ -678,6 +715,9 @@ class SimpleTM(torch.nn.Module):
 
         If ``sample_nugget=False``, the nugget will be set to its posterior expectation
         ``beta_post[i] / alpha_post[i]``.
+
+        The kernel matrices are computed for ``block_size`` locations at a time
+        which bounds the memory use without changing the results.
         """
 
         if last_ind is not None and last_ind < x_fix.size(-1):
@@ -688,22 +728,8 @@ class SimpleTM(torch.nn.Module):
 
         num_samples = z.shape[0] if len(z.shape) > 1 else 1
 
-        augmented_data: AugmentedData = self.augment_data(self.data, None)
-
         data = self.data.response
         NN = self.data.conditioning_sets
-        scales = augmented_data.scales
-        sigmas = self.kernel._sigmas(scales)
-        self.intloglik.nug_mult
-
-        nug_mean = self.nugget(augmented_data)
-        kernel_result = self.kernel.forward(augmented_data, nug_mean)
-        nugget_mean = kernel_result.nug_mean
-        chol = kernel_result.GChol
-        tmp_res = self.intloglik.precalc(kernel_result, augmented_data.response)
-        y_tilde = tmp_res.y_tilde
-        beta_post = tmp_res.beta_post
-        alpha_post = tmp_res.alpha_post
         n, N = data.shape
         m = int(self.kernel._determine_m(NN.shape[1]))
         # loop over variables/locations
@@ -714,20 +740,21 @@ class SimpleTM(torch.nn.Module):
         x_new = torch.empty((num_samples, N), dtype=z.dtype)
         x_new[:, : x_fix.shape[0]] = x_fix
 
-        for i in range(x_fix.size(0), last_ind):
+        precalc = self._blocked_precalc(x_fix.size(0), last_ind, block_size)
+        for i, pre in zip(range(x_fix.size(0), last_ind), precalc):
             # predictive distribution for current sample
             if i == 0:
                 cStar = torch.zeros((num_samples, n))
                 prVar = torch.zeros((num_samples,))
                 cChol = torch.linalg.solve_triangular(
-                    chol[i, :, :], cStar.unsqueeze(-1), upper=False
+                    pre.chol, cStar.unsqueeze(-1), upper=False
                 ).squeeze(-1)
                 meanPred = torch.zeros(1)
                 varPredNoNug = torch.zeros(1)
 
-                initVar = beta_post[i] / alpha_post[i] * (1 + varPredNoNug)
+                initVar = pre.beta_post / pre.alpha_post * (1 + varPredNoNug)
                 tval = stats.t.ppf(
-                    stats.norm.cdf(z[..., i].numpy()), df=2 * alpha_post[i].numpy()
+                    stats.norm.cdf(z[..., i].numpy()), df=2 * pre.alpha_post.numpy()
                 )
                 x_new[:, i] = meanPred + initVar.sqrt() * torch.from_numpy(tval)
 
@@ -736,16 +763,16 @@ class SimpleTM(torch.nn.Module):
                 X = data[:, NN[i, :ncol]]
                 XPred = x_new[:, NN[i, :ncol]].unsqueeze(1)
                 cStar = self.kernel._kernel_fun(
-                    XPred, sigmas[i], nugget_mean[i], X
+                    XPred, pre.sigma, pre.nug_mean, X
                 ).squeeze(1)
-                prVar = self.kernel._kernel_fun(
-                    XPred, sigmas[i], nugget_mean[i]
-                ).squeeze((1, 2))
+                prVar = self.kernel._kernel_fun(XPred, pre.sigma, pre.nug_mean).squeeze(
+                    (1, 2)
+                )
                 cChol = torch.linalg.solve_triangular(
-                    chol[i, :, :], cStar.unsqueeze(-1), upper=False
+                    pre.chol, cStar.unsqueeze(-1), upper=False
                 ).squeeze(-1)
 
-                meanPred = y_tilde[i, :].unsqueeze(0).mul(cChol).sum(1)
+                meanPred = pre.y_tilde.unsqueeze(0).mul(cChol).sum(1)
                 varPredNoNug = prVar - cChol.square().sum(1)
 
                 if torch.any(varPredNoNug < 0.0):
@@ -754,14 +781,14 @@ class SimpleTM(torch.nn.Module):
 
                 if sample_nugget:
                     invGDist = InverseGamma(
-                        concentration=alpha_post[i], rate=beta_post[i]
+                        concentration=pre.alpha_post, rate=pre.beta_post
                     )
                     nugget = invGDist.sample((num_samples,))
                     zt = z[..., i].numpy()
                 else:
-                    nugget = beta_post[i] / alpha_post[i]
+                    nugget = pre.beta_post / pre.alpha_post
                     pnorm = stats.norm.cdf(z[..., i].numpy())
-                    zt = stats.t.ppf(pnorm, df=2 * alpha_post[i].numpy())
+                    zt = stats.t.ppf(pnorm, df=2 * pre.alpha_post.numpy())
 
                 initVar = nugget.mul(1 + varPredNoNug)
 
@@ -913,27 +940,53 @@ class SimpleTM(torch.nn.Module):
             tracked_chain=tracked_chain,
         )
 
-    def map_and_logdet(self, obs, last_ind=None):
+    def _blocked_precalc(
+        self, start: int, stop: int, block_size: int | None = None
+    ) -> Iterator[_LocationPreCalc]:
+        """Per-location kernel quantities for locations ``start, ..., stop - 1``.
+
+        The quantities are computed for one block of ``block_size`` locations at
+        a time, so only one block's ``(block_size, n, n)`` kernel matrices are
+        held in memory. Each location's quantities depend only on that location,
+        so the block size does not change the results.
+        """
+        if block_size is None:
+            block_size = default_block_size(self.data.response.shape[0])
+        if block_size < 1:
+            raise ValueError(f"block_size must be positive, got {block_size}.")
+
+        scales = compute_scale(self.data.locs, self.data.conditioning_sets)
+        for lo in range(start, stop, block_size):
+            batch_idx = torch.arange(lo, min(lo + block_size, stop))
+            augmented_data: AugmentedData = self.augment_data(
+                self.data, batch_idx, scales
+            )
+            sigmas = self.kernel._sigmas(augmented_data.scales)
+            nug_mean = self.nugget(augmented_data)
+            kernel_result = self.kernel.forward(augmented_data, nug_mean)
+            tmp_res = self.intloglik.precalc(kernel_result, augmented_data.response)
+            for j in range(batch_idx.shape[0]):
+                yield _LocationPreCalc(
+                    sigma=sigmas[j],
+                    nug_mean=kernel_result.nug_mean[j],
+                    chol=kernel_result.GChol[j],
+                    y_tilde=tmp_res.y_tilde[j],
+                    alpha_post=tmp_res.alpha_post[j],
+                    beta_post=tmp_res.beta_post[j],
+                )
+            # release this block's matrices before the next block is computed
+            del augmented_data, sigmas, nug_mean, kernel_result, tmp_res
+
+    def map_and_logdet(self, obs, last_ind=None, block_size: int | None = None):
         """
         Evaluates the transport map and its log determinant.
-        """
-        augmented_data: AugmentedData = self.augment_data(self.data, None)
 
+        The kernel matrices are computed for ``block_size`` locations at a time
+        (default: `default_block_size`), which bounds the memory use without
+        changing the results.
+        """
         data = self.data.response
         NN = self.data.conditioning_sets
-        scales = augmented_data.scales
-        sigmas = self.kernel._sigmas(scales)
-
-        nug_mean = self.nugget(augmented_data)
-        kernel_result = self.kernel.forward(augmented_data, nug_mean)
-        nugget_mean = kernel_result.nug_mean
-        chol = kernel_result.GChol
-
-        tmp_res = self.intloglik.precalc(kernel_result, augmented_data.response)
-
-        y_tilde = tmp_res.y_tilde
-        beta_post = tmp_res.beta_post
-        alpha_post = tmp_res.alpha_post
 
         n, N = data.shape
         if obs.dim() == 1:
@@ -950,7 +1003,8 @@ class SimpleTM(torch.nn.Module):
         z = torch.full((n_input, N), fill_value=torch.nan)
         z_logdet = torch.full((n_input, N), fill_value=torch.nan)
 
-        for i in range(last_ind):
+        precalc = self._blocked_precalc(0, last_ind, block_size)
+        for i, pre in enumerate(precalc):
             # predictive distribution for current sample
             if i == 0:
                 cStar = torch.zeros((n_input, n))
@@ -961,17 +1015,17 @@ class SimpleTM(torch.nn.Module):
                 X = data[:, NN[i, :ncol]]
                 XPred = obs[:, NN[i, :ncol]].unsqueeze(1)
                 cStar = self.kernel._kernel_fun(
-                    XPred, sigmas[i], nugget_mean[i], X
+                    XPred, pre.sigma, pre.nug_mean, X
                 ).squeeze(1)
-                prVar = self.kernel._kernel_fun(
-                    XPred, sigmas[i], nugget_mean[i]
-                ).squeeze((1, 2))
+                prVar = self.kernel._kernel_fun(XPred, pre.sigma, pre.nug_mean).squeeze(
+                    (1, 2)
+                )
 
             cChol = torch.linalg.solve_triangular(
-                chol[i, :, :], cStar.unsqueeze(-1), upper=False
+                pre.chol, cStar.unsqueeze(-1), upper=False
             ).squeeze(-1)
 
-            meanPred = y_tilde[i, :].unsqueeze(0).mul(cChol).sum(1)
+            meanPred = pre.y_tilde.unsqueeze(0).mul(cChol).sum(1)
 
             varPredNoNug = prVar - cChol.square().sum(1)
 
@@ -980,40 +1034,52 @@ class SimpleTM(torch.nn.Module):
                 varPredNoNug = torch.clip(varPredNoNug, 0.0)
 
             # score
-            initVar = beta_post[i] / alpha_post[i] * (1 + varPredNoNug)
+            initVar = pre.beta_post / pre.alpha_post * (1 + varPredNoNug)
 
             z_tilde = (obs[:, i] - meanPred) / initVar.sqrt()
 
             # numerically stable approximation
-            z[..., i] = t_score_to_z_score_hill(z_tilde, df=2 * alpha_post[i])
+            z[..., i] = t_score_to_z_score_hill(z_tilde, df=2 * pre.alpha_post)
 
             z_logdet[:, i] = (
                 -0.5 * initVar.log()
-                + torch.distributions.StudentT(df=2 * alpha_post[i]).log_prob(z_tilde)
+                + torch.distributions.StudentT(df=2 * pre.alpha_post).log_prob(z_tilde)
                 - torch.distributions.Normal(loc=0.0, scale=1.0).log_prob(z[:, i])
             )
 
         return z, z_logdet
 
-    def log_prob_contributions(self, obs, x_fix=torch.tensor([]), last_ind=None):
+    def log_prob_contributions(
+        self,
+        obs,
+        x_fix=torch.tensor([]),
+        last_ind=None,
+        block_size: int | None = None,
+    ):
         """
         Log density contributions for all locations.
         """
         if isinstance(last_ind, int) and last_ind < x_fix.size(-1):
             raise ValueError("last_ind must be larger than conditioned field x_fix.")
-        z, z_logdet = self.map_and_logdet(obs, last_ind=last_ind)
+        z, z_logdet = self.map_and_logdet(obs, last_ind=last_ind, block_size=block_size)
 
         n_fixed = x_fix.size(0)
         norm = torch.distributions.Normal(loc=0.0, scale=1.0)
         return norm.log_prob(z[..., n_fixed:last_ind]) + z_logdet[..., n_fixed:last_ind]
 
     @torch.inference_mode(mode=True)
-    def score(self, obs, x_fix=torch.tensor([]), last_ind=None):
+    def score(
+        self,
+        obs,
+        x_fix=torch.tensor([]),
+        last_ind=None,
+        block_size: int | None = None,
+    ):
         """
         Joint log density.
         """
         lp_contrib = self.log_prob_contributions(
-            obs=obs, x_fix=x_fix, last_ind=last_ind
+            obs=obs, x_fix=x_fix, last_ind=last_ind, block_size=block_size
         )
         return lp_contrib.sum(axis=-1)
 
