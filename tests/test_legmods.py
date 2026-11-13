@@ -197,6 +197,53 @@ def test_legmods_prediction_uses_learned_m(simple_data: Data) -> None:
         assert torch.allclose(x_full, x_m)
 
 
+@pytest.mark.parametrize("block_size", [1, 7])
+def test_legmods_blocked_score_matches_unblocked(
+    simple_data: Data, block_size: int
+) -> None:
+    # computing the kernel for a few locations at a time does not change the scores
+    # (up to float32 rounding)
+
+    theta_init = torch.tensor(
+        [simple_data.response[:, 0].square().mean().log(), 0.3, 0.0, 0.0, 0.1, -1.0]
+    )
+    nlocs = simple_data.response.shape[1]
+    tm = SimpleTM(simple_data, theta_init, False, smooth=1.5, nug_mult=4.0)
+
+    obs = simple_data.response[:3, :]
+    x_fix = simple_data.response[0, :5]
+    with torch.no_grad():
+        lp = tm.log_prob_contributions(obs, block_size=nlocs)
+        lp_blocked = tm.log_prob_contributions(obs, block_size=block_size)
+        assert torch.allclose(lp, lp_blocked, atol=1e-5)
+
+        score = tm.score(obs[1], x_fix, last_ind=50, block_size=nlocs)
+        score_blocked = tm.score(obs[1], x_fix, last_ind=50, block_size=block_size)
+        assert torch.allclose(score, score_blocked, atol=1e-5)
+
+
+@pytest.mark.parametrize("block_size", [1, 7])
+def test_legmods_blocked_cond_sample_matches_unblocked(
+    simple_data: Data, block_size: int
+) -> None:
+    # computing the kernel for a few locations at a time does not change the samples
+    # (up to float32 rounding)
+
+    theta_init = torch.tensor(
+        [simple_data.response[:, 0].square().mean().log(), 0.3, 0.0, 0.0, 0.1, -1.0]
+    )
+    nlocs = simple_data.response.shape[1]
+    tm = SimpleTM(simple_data, theta_init, False, smooth=1.5, nug_mult=4.0)
+    x_fix = simple_data.response[0, :5]
+
+    with torch.no_grad():
+        torch.manual_seed(123)
+        sample = tm.cond_sample(x_fix, num_samples=3, block_size=nlocs)
+        torch.manual_seed(123)
+        sample_blocked = tm.cond_sample(x_fix, num_samples=3, block_size=block_size)
+    assert torch.allclose(sample, sample_blocked, atol=1e-5)
+
+
 def test_legmods_nugget_mean(simple_data: Data) -> None:
     augdata = AugmentData()(simple_data)
     theta_init = torch.tensor(
